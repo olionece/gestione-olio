@@ -137,7 +137,7 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
   const [variants, setVariants] = useState<VariantRow[]>([]);
   const [variantId, setVariantId] = useState<string>('');
   const [movement, setMovement] = useState<'in' | 'out' | 'adjust'>('in');
-  // ⬇️ quantità come stringa per consentire digitazione libera
+  // Quantità come stringa per digitazione libera (niente spinner; Safari-friendly)
   const [qtyInput, setQtyInput] = useState<string>('1');
   const [note, setNote] = useState<string>('');
 
@@ -188,3 +188,56 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
 
   return (
     <div className="mt-8 p-4 border rounded-xl space-y-3">
+      <h2 className="font-medium">Registra movimento</h2>
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <select className="border rounded p-2" value={variantId} onChange={e => setVariantId(e.target.value)}>
+          {variants.map(v => (
+            <option key={v.variant_id} value={v.variant_id}>
+              {v.vintage} · Lotto {v.lot_code} · {v.size_label}
+            </option>
+          ))}
+        </select>
+
+        <select
+          className="border rounded p-2"
+          value={movement}
+          onChange={e => setMovement(e.target.value as 'in' | 'out' | 'adjust')}
+        >
+          <option value="in">Ingresso</option>
+          <option value="out">Uscita</option>
+          <option value="adjust">Rettifica</option>
+        </select>
+
+        {/* Campo quantità: testo con filtro numerico e normalizzazione */}
+        <input
+          className="border rounded p-2"
+          type="text"
+          inputMode="numeric"
+          pattern="[0-9]*"
+          value={qtyInput}
+          onFocus={(e) => e.currentTarget.select()}
+          onKeyDown={(e) => {
+            const allow = ['Backspace','Delete','ArrowLeft','ArrowRight','Home','End','Tab','Enter'];
+            if (/^\d$/.test(e.key) || allow.includes(e.key)) return;
+            e.preventDefault();
+          }}
+          onChange={(e) => {
+            const onlyDigits = e.target.value.replace(/[^\d]/g, '');
+            setQtyInput(onlyDigits);
+          }}
+          onBlur={() => setQtyInput(String(normalizeQty(qtyInput)))}
+          placeholder="Quantità"
+        />
+
+        <input
+          className="border rounded p-2"
+          placeholder="Nota (facoltativa)"
+          value={note}
+          onChange={e => setNote(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') submit(); }}
+        />
+      </div>
+      <button className="border rounded px-4 py-2" onClick={submit}>Salva</button>
+    </div>
+  );
+}
