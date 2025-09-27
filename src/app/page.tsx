@@ -34,6 +34,20 @@ type VariantRow = {
   units_on_hand: number;
 };
 
+type MovementLogRow = {
+  id: string;
+  created_at: string;
+  movement: 'in' | 'out' | 'adjust';
+  quantity_units: number;
+  note: string | null;
+  variant_id: string;
+  vintage: number;
+  lot_code: string;
+  size_label: string;
+  ml: number;
+  created_by: string | null;
+};
+
 function useSession(): Session | null {
   const [session, setSession] = useState<Session | null>(null);
   useEffect(() => {
@@ -50,6 +64,7 @@ export default function Home() {
   const session = useSession();
   const [stock, setStock] = useState<StockRow[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
+  const [reloadLog, setReloadLog] = useState<number>(0);
 
   const canInsert = useMemo(() => roles.includes('operator') || roles.includes('admin'), [roles]);
 
@@ -94,8 +109,11 @@ export default function Home() {
     );
   }
 
+  const vintages = Array.from(new Set(stock.map(s => s.vintage))).sort((a, b) => b - a);
+
   return (
-    <div className="space-y-6">
+    <div className="space-y-10">
+      {/* Header + ruoli */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Giacenze</h1>
         <div className="text-sm flex items-center gap-3">
@@ -104,6 +122,7 @@ export default function Home() {
         </div>
       </div>
 
+      {/* Tabella giacenze */}
       <table className="w-full text-sm border-collapse">
         <thead>
           <tr className="border-b font-medium">
@@ -127,8 +146,19 @@ export default function Home() {
         </tbody>
       </table>
 
-      {canInsert && <MovementForm onInserted={refreshStock} />}
+      {/* Form movimenti */}
+      {canInsert && (
+        <MovementForm
+          onInserted={async () => {
+            await refreshStock();
+            setReloadLog((n) => n + 1); // aggiorna lo storico movimenti
+          }}
+        />
+      )}
       {!canInsert && <p className="text-sm opacity-80">Hai permessi di sola lettura (viewer).</p>}
+
+      {/* Storico Movimenti */}
+      <MovementsLog reloadKey={reloadLog} vintages={vintages} />
     </div>
   );
 }
@@ -137,7 +167,6 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
   const [variants, setVariants] = useState<VariantRow[]>([]);
   const [variantId, setVariantId] = useState<string>('');
   const [movement, setMovement] = useState<'in' | 'out' | 'adjust'>('in');
-
   // Quantità come stringa; consentiamo '-' SOLO per 'adjust'
   const [qtyInput, setQtyInput] = useState<string>('1');
   const [note, setNote] = useState<string>('');
@@ -164,22 +193,16 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
   const normalizeQty = (s: string): number => {
     const n = parseInt(s, 10);
     if (movement === 'adjust') {
-      // per rettifica: non può essere 0
-      if (Number.isNaN(n) || n === 0) return -1;
+      if (Number.isNaN(n) || n === 0) return -1; // rettifica non può essere zero
       return n;
     }
-    // per in/out: minimo 1
-    if (Number.isNaN(n) || n < 1) return 1;
+    if (Number.isNaN(n) || n < 1) return 1; // in/out min 1
     return n;
   };
 
   const submit = async () => {
     if (!variantId) return;
     const qty = normalizeQty(qtyInput);
-
-    // (facoltativo) richiedi nota per rettifica
-    // if (movement === 'adjust' && !note.trim()) { alert('Per una rettifica è richiesta una nota.'); return; }
-
     const { data: userData } = await supabase.auth.getUser();
     const { error } = await supabase.from('inventory_movements').insert({
       variant_id: variantId,
@@ -215,7 +238,6 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
           onChange={e => {
             const mv = e.target.value as 'in' | 'out' | 'adjust';
             setMovement(mv);
-            // aggiorna il placeholder di qty al cambio tipo
             setQtyInput(mv === 'adjust' ? '-1' : '1');
           }}
         >
@@ -246,7 +268,6 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
           onChange={(e) => {
             let v = e.target.value;
             if (movement === 'adjust') {
-              // consenti un solo '-' in testa + cifre
               v = v.replace(/[^\d-]/g, '').replace(/(?!^)-/g, '');
             } else {
               v = v.replace(/[^\d]/g, '');
@@ -266,6 +287,104 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
         />
       </div>
       <button className="border rounded px-4 py-2" onClick={submit}>Salva</button>
+    </div>
+  );
+}
+
+function MovementsLog({ reloadKey, vintages }: { reloadKey: number; vintages: number[] }) {
+  const [rows, setRows] = useState<MovementLogRow[]>([]);
+  const [mvType, setMvType] = useState<'all' | 'in' | 'out' | 'adjust'>('all');
+  const [vintage, setVintage] = useState<number | 'all'>('all');
+
+  const refreshMovements = async () => {
+    let q = supabase
+      .from('v_movements_detailed')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(200);
+    if (mvType !== 'all') q = q.eq('movement', mvType);
+    if (vintage !== 'all') q = q.eq('vintage', vintage as number);
+    const { data, error } = await q;
+    if (error) {
+      console.error(error);
+      return;
+    }
+    setRows((data ?? []) as MovementLogRow[]);
+  };
+
+  useEffect(() => { refreshMovements(); }, [reloadKey, mvType, vintage]);
+
+  const csvEscape = (v: string) => `"${v.replace(/"/g, '""')}"`;
+  const exportCsv = () => {
+    const header = ['Data', 'Tipo', 'Annata', 'Lotto', 'Formato', 'Qtà', 'Nota', 'Variante'];
+    const lines = rows.map(r => [
+      new Date(r.created_at).toLocaleString(),
+      r.movement,
+      String(r.vintage),
+      r.lot_code,
+      r.size_label,
+      String(r.quantity_units),
+      r.note ?? '',
+      r.variant_id,
+    ].map(x => csvEscape(String(x))).join(','));
+    const csv = header.map(csvEscape).join(',') + '\n' + lines.join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'movimenti.csv'; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold">📜 Movimenti (ultimi 200)</h2>
+        <div className="flex items-center gap-2">
+          <select className="border rounded p-2 text-sm" value={mvType} onChange={e => setMvType(e.target.value as any)}>
+            <option value="all">Tutti i tipi</option>
+            <option value="in">Ingresso</option>
+            <option value="out">Uscita</option>
+            <option value="adjust">Rettifica</option>
+          </select>
+          <select className="border rounded p-2 text-sm" value={vintage === 'all' ? 'all' : String(vintage)}
+                  onChange={e => setVintage(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
+            <option value="all">Tutte le annate</option>
+            {vintages.map(v => <option key={v} value={v}>{v}</option>)}
+          </select>
+          <button className="border rounded px-3 py-1 text-sm" onClick={refreshMovements}>Aggiorna</button>
+          <button className="border rounded px-3 py-1 text-sm" onClick={exportCsv}>Export CSV</button>
+        </div>
+      </div>
+
+      <table className="w-full text-sm border-collapse">
+        <thead>
+          <tr className="border-b font-medium">
+            <th className="text-left p-2">Data</th>
+            <th className="text-left p-2">Tipo</th>
+            <th className="text-left p-2">Annata</th>
+            <th className="text-left p-2">Lotto</th>
+            <th className="text-left p-2">Formato</th>
+            <th className="text-right p-2">Qtà</th>
+            <th className="text-left p-2">Nota</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map(r => (
+            <tr key={r.id} className="border-b">
+              <td className="p-2">{new Date(r.created_at).toLocaleString()}</td>
+              <td className="p-2">{r.movement}</td>
+              <td className="p-2">{r.vintage}</td>
+              <td className="p-2">{r.lot_code}</td>
+              <td className="p-2">{r.size_label}</td>
+              <td className="p-2 text-right">{r.quantity_units}</td>
+              <td className="p-2">{r.note}</td>
+            </tr>
+          ))}
+          {rows.length === 0 && (
+            <tr><td className="p-2 opacity-60" colSpan={7}>Nessun movimento trovato.</td></tr>
+          )}
+        </tbody>
+      </table>
     </div>
   );
 }
