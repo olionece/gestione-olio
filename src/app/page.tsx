@@ -46,6 +46,7 @@ type MovementLogRow = {
   size_label: string;
   ml: number;
   created_by: string | null;
+  operator_email: string | null;
 };
 
 function useSession(): Session | null {
@@ -209,7 +210,7 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
       movement,
       quantity_units: qty,
       note: note || null,
-      created_by: userData.user?.id ?? null
+      created_by: userData.user?.id ?? null // il trigger in DB lo compilerebbe comunque
     });
     if (error) {
       alert(error.message);
@@ -316,7 +317,7 @@ function MovementsLog({ reloadKey, vintages }: { reloadKey: number; vintages: nu
 
   const csvEscape = (v: string) => `"${v.replace(/"/g, '""')}"`;
   const exportCsv = () => {
-    const header = ['Data', 'Tipo', 'Annata', 'Lotto', 'Formato', 'Qtà', 'Nota', 'Variante'];
+    const header = ['Data', 'Tipo', 'Annata', 'Lotto', 'Formato', 'Qtà', 'Nota', 'Operatore', 'Variante'];
     const lines = rows.map(r => [
       new Date(r.created_at).toLocaleString(),
       r.movement,
@@ -325,6 +326,7 @@ function MovementsLog({ reloadKey, vintages }: { reloadKey: number; vintages: nu
       r.size_label,
       String(r.quantity_units),
       r.note ?? '',
+      r.operator_email ?? '',
       r.variant_id,
     ].map(x => csvEscape(String(x))).join(','));
     const csv = header.map(csvEscape).join(',') + '\n' + lines.join('\n');
@@ -366,6 +368,7 @@ function MovementsLog({ reloadKey, vintages }: { reloadKey: number; vintages: nu
             <th className="text-left p-2">Formato</th>
             <th className="text-right p-2">Qtà</th>
             <th className="text-left p-2">Nota</th>
+            <th className="text-left p-2">Operatore</th>
           </tr>
         </thead>
         <tbody>
@@ -378,10 +381,11 @@ function MovementsLog({ reloadKey, vintages }: { reloadKey: number; vintages: nu
               <td className="p-2">{r.size_label}</td>
               <td className="p-2 text-right">{r.quantity_units}</td>
               <td className="p-2">{r.note}</td>
+              <td className="p-2">{r.operator_email ?? ''}</td>
             </tr>
           ))}
           {rows.length === 0 && (
-            <tr><td className="p-2 opacity-60" colSpan={7}>Nessun movimento trovato.</td></tr>
+            <tr><td className="p-2 opacity-60" colSpan={8}>Nessun movimento trovato.</td></tr>
           )}
         </tbody>
       </table>
