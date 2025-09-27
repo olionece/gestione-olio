@@ -53,6 +53,20 @@ export default function Home() {
 
   const canInsert = useMemo(() => roles.includes('operator') || roles.includes('admin'), [roles]);
 
+  const refreshStock = async () => {
+    const { data, error } = await supabase
+      .from('v_stock_detailed')
+      .select('*')
+      .order('vintage', { ascending: false })
+      .order('lot_code', { ascending: true })
+      .order('ml', { ascending: true });
+    if (error) {
+      console.error(error);
+      return;
+    }
+    setStock((data ?? []) as StockRow[]);
+  };
+
   useEffect(() => {
     const load = async () => {
       if (!session) return;
@@ -64,14 +78,7 @@ export default function Home() {
       if (e1) console.error(e1);
       setRoles(((r1 ?? []) as UserRoleRow[]).map(r => r.role));
 
-      const { data: r2, error: e2 } = await supabase
-        .from('v_stock_detailed')
-        .select('*')
-        .order('vintage', { ascending: false })
-        .order('lot_code', { ascending: true })
-        .order('ml', { ascending: true });
-      if (e2) console.error(e2);
-      setStock((r2 ?? []) as StockRow[]);
+      await refreshStock();
     };
     load();
   }, [session]);
@@ -120,15 +127,7 @@ export default function Home() {
         </tbody>
       </table>
 
-      {canInsert && <MovementForm onInserted={async () => {
-        const { data: r2 } = await supabase
-          .from('v_stock_detailed')
-          .select('*')
-          .order('vintage', { ascending: false })
-          .order('lot_code', { ascending: true })
-          .order('ml', { ascending: true });
-        setStock((r2 ?? []) as StockRow[]);
-      }} />}
+      {canInsert && <MovementForm onInserted={refreshStock} />}
       {!canInsert && <p className="text-sm opacity-80">Hai permessi di sola lettura (viewer).</p>}
     </div>
   );
@@ -138,7 +137,8 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
   const [variants, setVariants] = useState<VariantRow[]>([]);
   const [variantId, setVariantId] = useState<string>('');
   const [movement, setMovement] = useState<'in' | 'out' | 'adjust'>('in');
-  const [qty, setQty] = useState<number>(1);
+  // ⬇️ quantità come stringa per consentire digitazione libera
+  const [qtyInput, setQtyInput] = useState<string>('1');
   const [note, setNote] = useState<string>('');
 
   useEffect(() => {
@@ -149,7 +149,10 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
         .order('vintage', { ascending: false })
         .order('lot_code', { ascending: true })
         .order('ml', { ascending: true });
-      if (error) console.error(error);
+      if (error) {
+        console.error(error);
+        return;
+      }
       const rows = (data ?? []) as VariantRow[];
       setVariants(rows);
       if (rows[0]) setVariantId(rows[0].variant_id);
@@ -157,8 +160,15 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
     load();
   }, []);
 
+  const normalizeQty = (s: string): number => {
+    const n = parseInt(s, 10);
+    if (Number.isNaN(n) || n < 1) return 1;
+    return n;
+  };
+
   const submit = async () => {
-    if (!variantId || qty < 1) return;
+    if (!variantId) return;
+    const qty = normalizeQty(qtyInput);
     const { data: userData } = await supabase.auth.getUser();
     const { error } = await supabase.from('inventory_movements').insert({
       variant_id: variantId,
@@ -171,42 +181,10 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
       alert(error.message);
     } else {
       setNote('');
-      setQty(1);
+      setQtyInput('1');
       onInserted();
     }
   };
 
   return (
     <div className="mt-8 p-4 border rounded-xl space-y-3">
-      <h2 className="font-medium">Registra movimento</h2>
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-        <select className="border rounded p-2" value={variantId} onChange={e => setVariantId(e.target.value)}>
-          {variants.map(v => (
-            <option key={v.variant_id} value={v.variant_id}>
-              {v.vintage} · Lotto {v.lot_code} · {v.size_label}
-            </option>
-          ))}
-        </select>
-        <select className="border rounded p-2" value={movement} onChange={e => setMovement(e.target.value as 'in' | 'out' | 'adjust')}>
-          <option value="in">Ingresso</option>
-          <option value="out">Uscita</option>
-          <option value="adjust">Rettifica</option>
-        </select>
-        <input
-          className="border rounded p-2"
-          type="number"
-          min={1}
-          value={qty}
-          onChange={e => setQty(Number(e.target.value || 1))}
-        />
-        <input
-          className="border rounded p-2"
-          placeholder="Nota (facoltativa)"
-          value={note}
-          onChange={e => setNote(e.target.value)}
-        />
-      </div>
-      <button className="border rounded px-4 py-2" onClick={submit}>Salva</button>
-    </div>
-  );
-}
