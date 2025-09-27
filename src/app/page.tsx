@@ -1,21 +1,55 @@
 'use client';
+
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
+import AuthBox from '@/components/Auth';
+import type { Session } from '@supabase/supabase-js';
 
-function useSession() {
-  const [session, setSession] = useState<any>(null);
+type Role = 'viewer' | 'operator' | 'admin';
+
+type UserRoleRow = {
+  role: Role;
+};
+
+type StockRow = {
+  variant_id: string;
+  lot_id: string;
+  lot_code: string;
+  vintage: number;
+  size_id: string;
+  size_label: string;
+  ml: number;
+  units_on_hand: number;
+  liters_on_hand: number;
+};
+
+type VariantRow = {
+  variant_id: string;
+  lot_id: string;
+  lot_code: string;
+  vintage: number;
+  size_id: string;
+  size_label: string;
+  ml: number;
+  units_on_hand: number;
+};
+
+function useSession(): Session | null {
+  const [session, setSession] = useState<Session | null>(null);
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: sub } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
-    return () => sub.subscription.unsubscribe();
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+    });
+    return () => authListener.subscription.unsubscribe();
   }, []);
   return session;
 }
 
 export default function Home() {
   const session = useSession();
-  const [stock, setStock] = useState<any[]>([]);
-  const [roles, setRoles] = useState<string[]>([]);
+  const [stock, setStock] = useState<StockRow[]>([]);
+  const [roles, setRoles] = useState<Role[]>([]);
 
   const canInsert = useMemo(() => roles.includes('operator') || roles.includes('admin'), [roles]);
 
@@ -23,19 +57,21 @@ export default function Home() {
     const load = async () => {
       if (!session) return;
 
-      const { data: r1 } = await supabase
+      const { data: r1, error: e1 } = await supabase
         .from('user_roles')
         .select('role')
         .eq('user_id', session.user.id);
-      setRoles((r1 || []).map((r: any) => r.role));
+      if (e1) console.error(e1);
+      setRoles(((r1 ?? []) as UserRoleRow[]).map(r => r.role));
 
-      const { data: r2 } = await supabase
+      const { data: r2, error: e2 } = await supabase
         .from('v_stock_detailed')
         .select('*')
         .order('vintage', { ascending: false })
         .order('lot_code', { ascending: true })
         .order('ml', { ascending: true });
-      setStock(r2 || []);
+      if (e2) console.error(e2);
+      setStock((r2 ?? []) as StockRow[]);
     };
     load();
   }, [session]);
@@ -43,7 +79,6 @@ export default function Home() {
   const signOut = async () => { await supabase.auth.signOut(); };
 
   if (!session) {
-    const AuthBox = require('@/components/Auth').default;
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-semibold">Gestione Olio</h1>
@@ -73,8 +108,8 @@ export default function Home() {
           </tr>
         </thead>
         <tbody>
-          {stock.map((r, i) => (
-            <tr key={i} className="border-b">
+          {stock.map((r) => (
+            <tr key={r.variant_id} className="border-b">
               <td className="p-2">{r.vintage}</td>
               <td className="p-2">{r.lot_code}</td>
               <td className="p-2">{r.size_label}</td>
@@ -85,43 +120,60 @@ export default function Home() {
         </tbody>
       </table>
 
-      {canInsert && <MovementForm onInserted={() => location.reload()} />}
+      {canInsert && <MovementForm onInserted={async () => {
+        const { data: r2 } = await supabase
+          .from('v_stock_detailed')
+          .select('*')
+          .order('vintage', { ascending: false })
+          .order('lot_code', { ascending: true })
+          .order('ml', { ascending: true });
+        setStock((r2 ?? []) as StockRow[]);
+      }} />}
       {!canInsert && <p className="text-sm opacity-80">Hai permessi di sola lettura (viewer).</p>}
     </div>
   );
 }
 
 function MovementForm({ onInserted }: { onInserted: () => void }) {
-  const [variants, setVariants] = useState<any[]>([]);
-  const [variantId, setVariantId] = useState('');
+  const [variants, setVariants] = useState<VariantRow[]>([]);
+  const [variantId, setVariantId] = useState<string>('');
   const [movement, setMovement] = useState<'in' | 'out' | 'adjust'>('in');
   const [qty, setQty] = useState<number>(1);
-  const [note, setNote] = useState('');
+  const [note, setNote] = useState<string>('');
 
   useEffect(() => {
     const load = async () => {
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('v_stock_units')
         .select('*')
         .order('vintage', { ascending: false })
         .order('lot_code', { ascending: true })
         .order('ml', { ascending: true });
-      setVariants(data || []);
-      if (data && data[0]) setVariantId(data[0].variant_id);
+      if (error) console.error(error);
+      const rows = (data ?? []) as VariantRow[];
+      setVariants(rows);
+      if (rows[0]) setVariantId(rows[0].variant_id);
     };
     load();
   }, []);
 
   const submit = async () => {
-    if (!variantId) return;
+    if (!variantId || qty < 1) return;
+    const { data: userData } = await supabase.auth.getUser();
     const { error } = await supabase.from('inventory_movements').insert({
       variant_id: variantId,
       movement,
       quantity_units: qty,
-      note,
-      created_by: (await supabase.auth.getUser()).data.user?.id
+      note: note || null,
+      created_by: userData.user?.id ?? null
     });
-    if (error) alert(error.message); else onInserted();
+    if (error) {
+      alert(error.message);
+    } else {
+      setNote('');
+      setQty(1);
+      onInserted();
+    }
   };
 
   return (
@@ -135,7 +187,7 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
             </option>
           ))}
         </select>
-        <select className="border rounded p-2" value={movement} onChange={e => setMovement(e.target.value as any)}>
+        <select className="border rounded p-2" value={movement} onChange={e => setMovement(e.target.value as 'in' | 'out' | 'adjust')}>
           <option value="in">Ingresso</option>
           <option value="out">Uscita</option>
           <option value="adjust">Rettifica</option>
@@ -145,7 +197,7 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
           type="number"
           min={1}
           value={qty}
-          onChange={e => setQty(parseInt(e.target.value || '1'))}
+          onChange={e => setQty(Number(e.target.value || 1))}
         />
         <input
           className="border rounded p-2"
