@@ -6,6 +6,7 @@ import AuthBox from '@/components/Auth';
 import type { Session } from '@supabase/supabase-js';
 
 type Role = 'viewer' | 'operator' | 'admin';
+type MovementType = 'all' | 'in' | 'out' | 'adjust';
 
 type UserRoleRow = {
   role: Role;
@@ -53,10 +54,10 @@ function useSession(): Session | null {
   const [session, setSession] = useState<Session | null>(null);
   useEffect(() => {
     supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: authListener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
       setSession(nextSession);
     });
-    return () => authListener.subscription.unsubscribe();
+    return () => subscription.unsubscribe();
   }, []);
   return session;
 }
@@ -294,7 +295,7 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
 
 function MovementsLog({ reloadKey, vintages }: { reloadKey: number; vintages: number[] }) {
   const [rows, setRows] = useState<MovementLogRow[]>([]);
-  const [mvType, setMvType] = useState<'all' | 'in' | 'out' | 'adjust'>('all');
+  const [mvType, setMvType] = useState<MovementType>('all');
   const [vintage, setVintage] = useState<number | 'all'>('all');
 
   const refreshMovements = async () => {
@@ -342,14 +343,21 @@ function MovementsLog({ reloadKey, vintages }: { reloadKey: number; vintages: nu
       <div className="flex items-center justify-between">
         <h2 className="text-xl font-semibold">📜 Movimenti (ultimi 200)</h2>
         <div className="flex items-center gap-2">
-          <select className="border rounded p-2 text-sm" value={mvType} onChange={e => setMvType(e.target.value as any)}>
+          <select
+            className="border rounded p-2 text-sm"
+            value={mvType}
+            onChange={e => setMvType(e.target.value as MovementType)}
+          >
             <option value="all">Tutti i tipi</option>
             <option value="in">Ingresso</option>
             <option value="out">Uscita</option>
             <option value="adjust">Rettifica</option>
           </select>
-          <select className="border rounded p-2 text-sm" value={vintage === 'all' ? 'all' : String(vintage)}
-                  onChange={e => setVintage(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
+          <select
+            className="border rounded p-2 text-sm"
+            value={vintage === 'all' ? 'all' : String(vintage)}
+            onChange={e => setVintage(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+          >
             <option value="all">Tutte le annate</option>
             {vintages.map(v => <option key={v} value={v}>{v}</option>)}
           </select>
