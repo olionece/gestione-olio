@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import AuthBox from '@/components/Auth';
+import ThemeToggle from '@/components/ThemeToggle';
 import type { Session } from '@supabase/supabase-js';
 
 type Role = 'viewer' | 'operator' | 'admin';
@@ -44,6 +45,11 @@ export default function Home() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [reloadLog, setReloadLog] = useState<number>(0);
 
+  // ── FILTRI GIACENZE ─────────────────────────────────────────────
+  const [fVintage, setFVintage] = useState<number | 'all'>('all');
+  const [fLot, setFLot] = useState<'all' | 'A' | 'B' | 'C'>('all');
+  const [fSize, setFSize] = useState<'all' | string>('all');
+
   const canInsert = useMemo(() => roles.includes('operator') || roles.includes('admin'), [roles]);
 
   const refreshStock = async () => {
@@ -66,11 +72,29 @@ export default function Home() {
     load();
   }, [session]);
 
-  const totals = useMemo(() => {
-    const liters = stock.reduce((s, r) => s + (r.liters_on_hand ?? 0), 0);
-    const units  = stock.reduce((s, r) => s + (r.units_on_hand ?? 0), 0);
-    return { liters, units };
+  // Opzioni uniche per i filtri giacenze
+  const stockVintages = useMemo(() => Array.from(new Set(stock.map(s => s.vintage))).sort((a, b) => b - a), [stock]);
+  const stockLots = useMemo(() => Array.from(new Set(stock.map(s => s.lot_code))).sort(), [stock]);
+  const stockSizes = useMemo(() => {
+    // ordina per ml, poi prendi label
+    const ordered = [...stock].sort((a, b) => a.ml - b.ml);
+    return Array.from(new Set(ordered.map(s => s.size_label)));
   }, [stock]);
+
+  // Applica filtri alla tabella giacenze
+  const stockFiltered = useMemo(() => {
+    return stock.filter(s =>
+      (fVintage === 'all' || s.vintage === fVintage) &&
+      (fLot === 'all' || s.lot_code === fLot) &&
+      (fSize === 'all' || s.size_label === fSize)
+    );
+  }, [stock, fVintage, fLot, fSize]);
+
+  const totals = useMemo(() => {
+    const liters = stockFiltered.reduce((sum, r) => sum + (r.liters_on_hand ?? 0), 0);
+    const units  = stockFiltered.reduce((sum, r) => sum + (r.units_on_hand ?? 0), 0);
+    return { liters, units };
+  }, [stockFiltered]);
 
   const signOut = async () => { await supabase.auth.signOut(); };
 
@@ -78,15 +102,13 @@ export default function Home() {
     return (
       <div className="space-y-6">
         <h1 className="text-3xl font-semibold tracking-tight">🫒 Gestione Olio</h1>
-        <p className="text-stone-600">Accedi con la tua email per entrare nel magazzino.</p>
-        <div className="rounded-2xl border bg-white shadow-sm p-6">
+        <p className="text-stone-600 dark:text-stone-300">Accedi con la tua email per entrare nel magazzino.</p>
+        <div className="rounded-2xl border bg-white shadow-sm p-6 border-stone-200 dark:bg-stone-900 dark:border-stone-700">
           <AuthBox />
         </div>
       </div>
     );
   }
-
-  const vintages = Array.from(new Set(stock.map(s => s.vintage))).sort((a, b) => b - a);
 
   return (
     <div className="space-y-10">
@@ -94,36 +116,83 @@ export default function Home() {
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-3xl font-semibold tracking-tight">
-            <span className="bg-clip-text text-transparent bg-gradient-to-r from-amber-700 to-amber-500">
+            <span className="bg-clip-text text-transparent bg-gradient-to-r from-amber-700 to-amber-500
+                             dark:from-amber-400 dark:to-amber-200">
               Gestione Olio
             </span>
           </h1>
-          <p className="text-sm text-stone-500">Magazzino annate 2024–2025 · Lotti A/B/C · Formati 250/500 ml e 5 L</p>
+          <p className="text-sm text-stone-500 dark:text-stone-400">
+            Magazzino annate 2024–2025 · Lotti A/B/C · Formati 250/500 ml e 5 L
+          </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          <ThemeToggle />
           <RolesChips roles={roles} />
-          <button className="inline-flex items-center rounded-lg border px-3 py-1.5 text-sm shadow-sm hover:bg-stone-50"
-                  onClick={signOut}>Esci</button>
+          <button
+            className="inline-flex items-center rounded-lg border px-3 py-1.5 text-sm shadow-sm
+                       bg-white hover:bg-stone-50 border-stone-200
+                       dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
+            onClick={signOut}
+          >
+            Esci
+          </button>
         </div>
       </div>
 
-      {/* Stat cards */}
+      {/* Stat cards (sui dati filtrati) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <StatCard label="Litri totali" value={`${totals.liters.toLocaleString(undefined, { maximumFractionDigits: 2 })} L`} />
-        <StatCard label="Unità totali" value={totals.units.toLocaleString()} />
-        <StatCard label="Varianti" value={stock.length.toString()} />
+        <StatCard label="Litri (filtro)" value={`${totals.liters.toLocaleString(undefined, { maximumFractionDigits: 2 })} L`} />
+        <StatCard label="Unità (filtro)" value={totals.units.toLocaleString()} />
+        <StatCard label="Varianti (filtro)" value={stockFiltered.length.toString()} />
       </div>
 
-      {/* Giacenze */}
-      <div className="rounded-2xl border bg-white shadow-sm">
-        <div className="p-4 md:p-6 border-b flex items-center justify-between">
+      {/* Giacenze con filtri */}
+      <div className="rounded-2xl border bg-white shadow-sm border-stone-200 dark:bg-stone-900 dark:border-stone-700">
+        <div className="p-4 md:p-6 border-b border-stone-200 dark:border-stone-700 flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-lg md:text-xl font-semibold">Giacenze</h2>
-          <span className="text-xs md:text-sm text-stone-500">Aggiorna con i movimenti</span>
+          <div className="flex items-center gap-2 flex-wrap text-sm">
+            <select
+              className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+              value={fVintage === 'all' ? 'all' : String(fVintage)}
+              onChange={e => setFVintage(e.target.value === 'all' ? 'all' : Number(e.target.value))}
+            >
+              <option value="all">Tutte le annate</option>
+              {stockVintages.map(v => <option key={v} value={v}>{v}</option>)}
+            </select>
+
+            <select
+              className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+              value={fLot}
+              onChange={e => setFLot(e.target.value as any)}
+            >
+              <option value="all">Tutti i lotti</option>
+              {stockLots.map(l => <option key={l} value={l}>{l}</option>)}
+            </select>
+
+            <select
+              className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+              value={fSize}
+              onChange={e => setFSize(e.target.value as any)}
+            >
+              <option value="all">Tutti i formati</option>
+              {stockSizes.map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+
+            <button
+              className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
+                         border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
+              onClick={() => { setFVintage('all'); setFLot('all'); setFSize('all'); }}
+            >
+              Azzera filtri
+            </button>
+          </div>
         </div>
+
         <div className="p-4 md:p-6 overflow-x-auto">
           <table className="w-full text-sm">
-            <thead className="sticky top-0 bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60">
-              <tr className="border-b font-medium text-stone-600">
+            <thead className="sticky top-0 bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60
+                              dark:bg-stone-900/80 dark:supports-[backdrop-filter]:bg-stone-900/60">
+              <tr className="border-b font-medium text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-700">
                 <th className="text-left p-2">Annata</th>
                 <th className="text-left p-2">Lotto</th>
                 <th className="text-left p-2">Formato</th>
@@ -131,9 +200,9 @@ export default function Home() {
                 <th className="text-right p-2">Litri</th>
               </tr>
             </thead>
-            <tbody className="divide-y">
-              {stock.map((r) => (
-                <tr key={r.variant_id} className="hover:bg-amber-50/40">
+            <tbody className="divide-y divide-stone-200 dark:divide-stone-800">
+              {stockFiltered.map((r) => (
+                <tr key={r.variant_id} className="hover:bg-amber-50/40 dark:hover:bg-stone-800/40">
                   <td className="p-2">{r.vintage}</td>
                   <td className="p-2">{r.lot_code}</td>
                   <td className="p-2">{r.size_label}</td>
@@ -141,29 +210,37 @@ export default function Home() {
                   <td className="p-2 text-right">{r.liters_on_hand}</td>
                 </tr>
               ))}
+              {stockFiltered.length === 0 && (
+                <tr><td className="p-2 opacity-60" colSpan={5}>Nessuna variante per i filtri selezionati.</td></tr>
+              )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* Form movimenti */}
-      {canInsert ? (
-        <div className="rounded-2xl border bg-white shadow-sm">
-          <div className="p-4 md:p-6 border-b">
-            <h2 className="text-lg md:text-xl font-semibold">Registra movimento</h2>
-            <p className="text-xs text-stone-500 mt-1">Usa Rettifica per correzioni inventariali (può essere negativa).</p>
-          </div>
-          <div className="p-4 md:p-6">
-            <MovementForm onInserted={async () => { await refreshStock(); setReloadLog(n => n + 1); }} />
-          </div>
+      {/* Form movimenti con selezione a cascata Annata → Lotto → Formato */}
+      <div className="rounded-2xl border bg-white shadow-sm border-stone-200 dark:bg-stone-900 dark:border-stone-700">
+        <div className="p-4 md:p-6 border-b border-stone-200 dark:border-stone-700">
+          <h2 className="text-lg md:text-xl font-semibold">Registra movimento</h2>
+          <p className="text-xs text-stone-500 dark:text-stone-400 mt-1">
+            Usa Rettifica per correzioni inventariali (può essere negativa). Scegli annata, lotto e formato per identificare la variante.
+          </p>
         </div>
-      ) : (
-        <p className="text-sm opacity-80">Hai permessi di sola lettura (viewer).</p>
-      )}
+        <div className="p-4 md:p-6">
+          <MovementForm
+            onInserted={async () => { await refreshStock(); setReloadLog(n => n + 1); }}
+          />
+        </div>
+      </div>
 
-      {/* Storico movimenti */}
-      <div className="rounded-2xl border bg-white shadow-sm">
-        <MovementsLog reloadKey={reloadLog} vintages={vintages} />
+      {/* Storico movimenti con filtri (aggiunti anche Lotto e Formato) */}
+      <div className="rounded-2xl border bg-white shadow-sm border-stone-200 dark:bg-stone-900 dark:border-stone-700">
+        <MovementsLog
+          reloadKey={reloadLog}
+          vintages={stockVintages}
+          lots={stockLots}
+          sizes={stockSizes}
+        />
       </div>
     </div>
   );
@@ -172,14 +249,16 @@ export default function Home() {
 /* ====== piccoli componenti UI ====== */
 function RolesChips({ roles }: { roles: Role[] }) {
   const map: Record<Role, { txt: string; cls: string }> = {
-    admin:    { txt: 'admin',    cls: 'bg-purple-50 text-purple-700 border-purple-200' },
-    operator: { txt: 'operator', cls: 'bg-amber-50 text-amber-700 border-amber-200' },
-    viewer:   { txt: 'viewer',   cls: 'bg-stone-100 text-stone-700 border-stone-200' },
+    admin:    { txt: 'admin',    cls: 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/30 dark:text-purple-200 dark:border-purple-800' },
+    operator: { txt: 'operator', cls: 'bg-amber-50  text-amber-700  border-amber-200  dark:bg-amber-900/30  dark:text-amber-200  dark:border-amber-800' },
+    viewer:   { txt: 'viewer',   cls: 'bg-stone-100 text-stone-700 border-stone-200 dark:bg-stone-800/50  dark:text-stone-200 dark:border-stone-700' },
   };
   return (
     <div className="flex items-center gap-1.5">
       {roles.length === 0 && (
-        <span className="inline-flex items-center rounded-full border px-2 py-1 text-xs bg-stone-100 text-stone-700 border-stone-200">
+        <span className="inline-flex items-center rounded-full border px-2 py-1 text-xs
+                         bg-stone-100 text-stone-700 border-stone-200
+                         dark:bg-stone-800/50 dark:text-stone-200 dark:border-stone-700">
           viewer
         </span>
       )}
@@ -194,19 +273,24 @@ function RolesChips({ roles }: { roles: Role[] }) {
 
 function StatCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-2xl border bg-white shadow-sm p-4 md:p-6">
-      <div className="text-xs uppercase tracking-wide text-stone-500">{label}</div>
+    <div className="rounded-2xl border bg-white shadow-sm p-4 md:p-6
+                    border-stone-200 dark:bg-stone-900 dark:border-stone-700">
+      <div className="text-xs uppercase tracking-wide text-stone-500 dark:text-stone-400">{label}</div>
       <div className="mt-1 text-2xl font-semibold">{value}</div>
     </div>
   );
 }
 
-/* ====== Form movimenti (UX rifinita) ====== */
+/* ====== Form movimenti con menu a tendina a cascata ====== */
 function MovementForm({ onInserted }: { onInserted: () => void }) {
   const [variants, setVariants] = useState<VariantRow[]>([]);
+  // selezioni a cascata
+  const [selVintage, setSelVintage] = useState<number | null>(null);
+  const [selLot, setSelLot] = useState<'A'|'B'|'C' | ''>('');
+  const [selSize, setSelSize] = useState<string>('');
   const [variantId, setVariantId] = useState<string>('');
   const [movement, setMovement] = useState<'in' | 'out' | 'adjust'>('in');
-  const [qtyInput, setQtyInput] = useState<string>('1');      // string -> digitazione libera
+  const [qtyInput, setQtyInput] = useState<string>('1');
   const [note, setNote] = useState<string>('');
   const [busy, setBusy] = useState<boolean>(false);
   const [toast, setToast] = useState<{type:'ok'|'err'; msg:string} | null>(null);
@@ -221,18 +305,47 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
       if (error) { console.error(error); return; }
       const rows = (data ?? []) as VariantRow[];
       setVariants(rows);
-      if (rows[0]) setVariantId(rows[0].variant_id);
+      if (rows[0]) {
+        setSelVintage(rows[0].vintage);
+        setSelLot(rows[0].lot_code as 'A'|'B'|'C');
+        setSelSize(rows[0].size_label);
+      }
     };
     load();
   }, []);
 
+  // opzioni derivate dalla selezione corrente
+  const formVintages = useMemo(() => Array.from(new Set(variants.map(v => v.vintage))).sort((a,b)=>b-a), [variants]);
+  const formLots = useMemo(() => {
+    const src = selVintage ? variants.filter(v => v.vintage === selVintage) : variants;
+    return Array.from(new Set(src.map(v => v.lot_code))).sort() as ('A'|'B'|'C')[];
+  }, [variants, selVintage]);
+  const formSizes = useMemo(() => {
+    const src = variants.filter(v =>
+      (selVintage ? v.vintage === selVintage : true) &&
+      (selLot ? v.lot_code === selLot : true)
+    ).sort((a,b)=>a.ml-b.ml);
+    return Array.from(new Set(src.map(v => v.size_label)));
+  }, [variants, selVintage, selLot]);
+
+  // quando cambia una selezione, calcola la variant
+  useEffect(() => {
+    if (selVintage && selLot && selSize) {
+      const match = variants.find(v => v.vintage === selVintage && v.lot_code === selLot && v.size_label === selSize);
+      setVariantId(match?.variant_id ?? '');
+    } else {
+      setVariantId('');
+    }
+  }, [variants, selVintage, selLot, selSize]);
+
+  // Normalizzazione quantità
   const normalizeQty = (s: string): number => {
     const n = parseInt(s, 10);
     if (movement === 'adjust') {
-      if (Number.isNaN(n) || n === 0) return -1;
+      if (Number.isNaN(n) || n === 0) return -1; // rettifica non può essere zero
       return n;
     }
-    if (Number.isNaN(n) || n < 1) return 1;
+    if (Number.isNaN(n) || n < 1) return 1; // in/out min 1
     return n;
   };
 
@@ -242,17 +355,16 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
     const qty = normalizeQty(qtyInput);
     const { data: userData } = await supabase.auth.getUser();
     const { error } = await supabase.from('inventory_movements').insert({
-      variant_id: variantId,
-      movement, quantity_units: qty,
-      note: note || null,
-      created_by: userData.user?.id ?? null
+      variant_id: variantId, movement, quantity_units: qty,
+      note: note || null, created_by: userData.user?.id ?? null
     });
     setBusy(false);
     if (error) {
       setToast({ type:'err', msg: error.message });
     } else {
       setToast({ type:'ok', msg: 'Movimento registrato' });
-      setNote(''); setQtyInput(movement === 'adjust' ? '-1' : '1');
+      setNote('');
+      setQtyInput(movement === 'adjust' ? '-1' : '1');
       onInserted();
     }
     setTimeout(() => setToast(null), 2500);
@@ -263,7 +375,8 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
       type="button"
       onClick={() => { setMovement(val); setQtyInput(val === 'adjust' ? '-1' : '1'); }}
       className={`px-3 py-1.5 text-sm rounded-lg border transition
-        ${movement === val ? `${cls} ring-2 ring-offset-1` : 'bg-white hover:bg-stone-50'}
+        ${movement === val ? `${cls} ring-2 ring-offset-1 ring-offset-amber-50 dark:ring-offset-stone-900`
+                           : 'bg-white hover:bg-stone-50 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700'}
       `}
     >
       {label}
@@ -273,26 +386,58 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
   return (
     <div className="space-y-4">
       {/* segmented control */}
-      <div className="inline-flex gap-2 rounded-xl p-1 border bg-stone-50">
-        {mvBtn('in', 'Ingresso', 'bg-green-50 border-green-200 text-green-700')}
-        {mvBtn('out','Uscita',   'bg-rose-50  border-rose-200  text-rose-700')}
-        {mvBtn('adjust','Rettifica','bg-amber-50 border-amber-200 text-amber-700')}
+      <div className="inline-flex gap-2 rounded-xl p-1 border bg-stone-50
+                      border-stone-200 dark:bg-stone-800/40 dark:border-stone-700">
+        {mvBtn('in', 'Ingresso', 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/30 dark:border-green-800 dark:text-green-200')}
+        {mvBtn('out','Uscita',   'bg-rose-50  border-rose-200  text-rose-700  dark:bg-rose-900/30  dark:border-rose-800  dark:text-rose-200')}
+        {mvBtn('adjust','Rettifica','bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-900/30 dark:border-amber-800 dark:text-amber-200')}
       </div>
 
+      {/* selezioni a cascata */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-        <select className="border rounded-lg p-2.5 bg-white"
-                value={variantId} onChange={e=>setVariantId(e.target.value)}>
-          {variants.map(v => (
-            <option key={v.variant_id} value={v.variant_id}>
-              {v.vintage} · Lotto {v.lot_code} · {v.size_label}
-            </option>
-          ))}
+        {/* Annata */}
+        <select
+          className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+          value={selVintage ?? ''}
+          onChange={e => {
+            const v = e.target.value ? Number(e.target.value) : null;
+            setSelVintage(v);
+            // reset successivi livelli
+            setSelLot('');
+            setSelSize('');
+          }}
+        >
+          {formVintages.length === 0 && <option value="">(nessuna)</option>}
+          {formVintages.map(v => <option key={v} value={v}>{v}</option>)}
         </select>
 
+        {/* Lotto */}
+        <select
+          className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+          value={selLot}
+          onChange={e => { setSelLot(e.target.value as any); setSelSize(''); }}
+          disabled={!selVintage}
+        >
+          {(!selVintage || formLots.length === 0) && <option value="">(seleziona annata)</option>}
+          {formLots.map(l => <option key={l} value={l}>{l}</option>)}
+        </select>
+
+        {/* Formato */}
+        <select
+          className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+          value={selSize}
+          onChange={e => setSelSize(e.target.value)}
+          disabled={!selVintage || !selLot}
+        >
+          {(!selVintage || !selLot || formSizes.length === 0) && <option value="">(seleziona lotto)</option>}
+          {formSizes.map(s => <option key={s} value={s}>{s}</option>)}
+        </select>
+
+        {/* Quantità */}
         <input
-          className="border rounded-lg p-2.5 bg-white"
-          type="text"
-          inputMode="numeric"
+          className="border rounded-lg p-2.5 bg-white border-stone-200
+                     dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+          type="text" inputMode="numeric"
           pattern={movement === 'adjust' ? '[0-9-]*' : '[0-9]*'}
           value={qtyInput}
           onFocus={(e) => e.currentTarget.select()}
@@ -312,23 +457,34 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
           onBlur={() => setQtyInput(String(normalizeQty(qtyInput)))}
           placeholder={movement === 'adjust' ? 'es. -3 per scarto' : 'Quantità'}
         />
+      </div>
 
-        <input className="border rounded-lg p-2.5 bg-white" placeholder="Nota (facoltativa)"
-               value={note} onChange={e=>setNote(e.target.value)}
-               onKeyDown={(e)=>{ if (e.key === 'Enter') submit(); }} />
-
-        <button onClick={submit}
-                className="rounded-lg border px-4 py-2.5 bg-amber-600 text-white hover:bg-amber-700 shadow-sm disabled:opacity-60"
-                disabled={busy}>
+      {/* Nota + Salva */}
+      <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3">
+        <input
+          className="border rounded-lg p-2.5 bg-white border-stone-200
+                     dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+          placeholder="Nota (facoltativa)"
+          value={note}
+          onChange={e=>setNote(e.target.value)}
+          onKeyDown={(e)=>{ if (e.key === 'Enter') submit(); }}
+        />
+        <button
+          onClick={submit}
+          className="rounded-lg border px-4 py-2.5 bg-amber-600 text-white hover:bg-amber-700 shadow-sm disabled:opacity-60
+                     border-amber-700 dark:border-amber-700"
+          disabled={busy || !variantId}
+          title={!variantId ? 'Seleziona annata, lotto e formato' : 'Salva movimento'}
+        >
           {busy ? 'Salvataggio…' : 'Salva'}
         </button>
       </div>
 
-      {/* toast semplice */}
       {toast && (
         <div className={`fixed bottom-5 right-5 rounded-xl border px-4 py-2.5 shadow-lg
-                         ${toast.type === 'ok' ? 'bg-green-50 border-green-200 text-green-800'
-                                               : 'bg-rose-50  border-rose-200  text-rose-800'}`}>
+                         ${toast.type === 'ok'
+                           ? 'bg-green-50 border-green-200 text-green-800 dark:bg-green-900/30 dark:border-green-800 dark:text-green-200'
+                           : 'bg-rose-50  border-rose-200  text-rose-800  dark:bg-rose-900/30  dark:border-rose-800  dark:text-rose-200'}`}>
           {toast.msg}
         </div>
       )}
@@ -336,23 +492,27 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
   );
 }
 
-/* ====== Storico movimenti (con badge & CSV) ====== */
-function MovementsLog({ reloadKey, vintages }: { reloadKey: number; vintages: number[] }) {
+/* ====== Storico movimenti con filtri estesi ====== */
+function MovementsLog({ reloadKey, vintages, lots, sizes }: { reloadKey: number; vintages: number[]; lots: string[]; sizes: string[] }) {
   const [rows, setRows] = useState<MovementLogRow[]>([]);
   const [mvType, setMvType] = useState<MovementType>('all');
   const [vintage, setVintage] = useState<number | 'all'>('all');
+  const [lot, setLot] = useState<string | 'all'>('all');
+  const [size, setSize] = useState<string | 'all'>('all');
 
   const refreshMovements = async () => {
     let q = supabase.from('v_movements_detailed').select('*')
       .order('created_at', { ascending: false }).limit(200);
     if (mvType !== 'all') q = q.eq('movement', mvType);
     if (vintage !== 'all') q = q.eq('vintage', vintage as number);
+    if (lot !== 'all') q = q.eq('lot_code', lot);
+    if (size !== 'all') q = q.eq('size_label', size);
     const { data, error } = await q;
     if (error) { console.error(error); return; }
     setRows((data ?? []) as MovementLogRow[]);
   };
 
-  useEffect(() => { refreshMovements(); }, [reloadKey, mvType, vintage]);
+  useEffect(() => { refreshMovements(); }, [reloadKey, mvType, vintage, lot, size]);
 
   const csvEscape = (v: string) => `"${v.replace(/"/g, '""')}"`;
   const exportCsv = () => {
@@ -369,31 +529,53 @@ function MovementsLog({ reloadKey, vintages }: { reloadKey: number; vintages: nu
 
   return (
     <>
-      <div className="p-4 md:p-6 border-b flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+      <div className="p-4 md:p-6 border-b border-stone-200 dark:border-stone-700
+                      flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <h2 className="text-lg md:text-xl font-semibold">📜 Movimenti (ultimi 200)</h2>
         <div className="flex items-center gap-2 flex-wrap">
-          <select className="border rounded-lg p-2 text-sm bg-white" value={mvType}
-                  onChange={e => setMvType(e.target.value as MovementType)}>
+          <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+                  value={mvType} onChange={e => setMvType(e.target.value as MovementType)}>
             <option value="all">Tutti i tipi</option>
             <option value="in">Ingresso</option>
             <option value="out">Uscita</option>
             <option value="adjust">Rettifica</option>
           </select>
-          <select className="border rounded-lg p-2 text-sm bg-white"
+
+          <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
                   value={vintage === 'all' ? 'all' : String(vintage)}
                   onChange={e => setVintage(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
             <option value="all">Tutte le annate</option>
             {vintages.map(v => <option key={v} value={v}>{v}</option>)}
           </select>
-          <button className="rounded-lg border px-3 py-1.5 text-sm bg-white hover:bg-stone-50 shadow-sm" onClick={refreshMovements}>Aggiorna</button>
-          <button className="rounded-lg border px-3 py-1.5 text-sm bg-white hover:bg-stone-50 shadow-sm" onClick={exportCsv}>Export CSV</button>
+
+          <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+                  value={lot} onChange={e => setLot(e.target.value)}>
+            <option value="all">Tutti i lotti</option>
+            {lots.map(l => <option key={l} value={l}>{l}</option>)}
+          </select>
+
+          <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+                  value={size} onChange={e => setSize(e.target.value)}>
+            <option value="all">Tutti i formati</option>
+            {sizes.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+
+          <button className="rounded-lg border px-3 py-1.5 text-sm bg-white hover:bg-stone-50 shadow-sm
+                             border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
+                  onClick={() => { setMvType('all'); setVintage('all'); setLot('all'); setSize('all'); }}>
+            Azzera filtri
+          </button>
+          <button className="rounded-lg border px-3 py-1.5 text-sm bg-white hover:bg-stone-50 shadow-sm
+                             border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
+                  onClick={exportCsv}>Export CSV</button>
         </div>
       </div>
 
       <div className="p-4 md:p-6 overflow-x-auto">
         <table className="w-full text-sm">
-          <thead className="sticky top-0 bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60">
-            <tr className="border-b font-medium text-stone-600">
+          <thead className="sticky top-0 bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60
+                            dark:bg-stone-900/80 dark:supports-[backdrop-filter]:bg-stone-900/60">
+            <tr className="border-b font-medium text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-700">
               <th className="text-left p-2">Data</th>
               <th className="text-left p-2">Tipo</th>
               <th className="text-left p-2">Annata</th>
@@ -404,13 +586,11 @@ function MovementsLog({ reloadKey, vintages }: { reloadKey: number; vintages: nu
               <th className="text-left p-2">Operatore</th>
             </tr>
           </thead>
-          <tbody className="divide-y">
+          <tbody className="divide-y divide-stone-200 dark:divide-stone-800">
             {rows.map(r => (
-              <tr key={r.id} className="hover:bg-amber-50/40">
+              <tr key={r.id} className="hover:bg-amber-50/40 dark:hover:bg-stone-800/40">
                 <td className="p-2">{new Date(r.created_at).toLocaleString()}</td>
-                <td className="p-2">
-                  <TypeBadge type={r.movement} />
-                </td>
+                <td className="p-2"><TypeBadge type={r.movement} /></td>
                 <td className="p-2">{r.vintage}</td>
                 <td className="p-2">{r.lot_code}</td>
                 <td className="p-2">{r.size_label}</td>
@@ -420,7 +600,7 @@ function MovementsLog({ reloadKey, vintages }: { reloadKey: number; vintages: nu
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td className="p-2 opacity-60" colSpan={8}>Nessun movimento trovato.</td></tr>
+              <tr><td className="p-2 opacity-60" colSpan={8}>Nessun movimento trovato per i filtri selezionati.</td></tr>
             )}
           </tbody>
         </table>
@@ -431,9 +611,9 @@ function MovementsLog({ reloadKey, vintages }: { reloadKey: number; vintages: nu
 
 function TypeBadge({ type }: { type: 'in'|'out'|'adjust' }) {
   const map = {
-    in:     'bg-green-50 text-green-700 border-green-200',
-    out:    'bg-rose-50  text-rose-700  border-rose-200',
-    adjust: 'bg-amber-50 text-amber-700 border-amber-200',
+    in:     'bg-green-50 text-green-700 border-green-200 dark:bg-green-900/30 dark:text-green-200 dark:border-green-800',
+    out:    'bg-rose-50  text-rose-700  border-rose-200  dark:bg-rose-900/30  dark:text-rose-200  dark:border-rose-800',
+    adjust: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-200 dark:border-amber-800',
   } as const;
   const label = { in: 'Ingresso', out: 'Uscita', adjust: 'Rettifica' }[type];
   return (
