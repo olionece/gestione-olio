@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { supabase } from '/lib/supabaseClient'; 
 import {
   Select,
   SelectTrigger,
@@ -10,23 +9,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-// --- IN CIMA al file (sotto gli import)
-const STATIC_WAREHOUSES = [
-  { label: 'Roma', value: '5630b7e1-becf-4f4e-8ed3-84f8c82f8bd4-ROMA' },
-  { label: 'Neci', value: '16a1716a-e748-4895-bd38-9807e8fcaaf4-NECI' },
-];
-
-// ...
-
-// --- SOSTITUISCI questo effect al posto di quello che fa la select su Supabase
-useEffect(() => {
-  // usa lista statica per sbloccare subito la UI
-  setWarehouses(STATIC_WAREHOUSES);
-  setWLoading(false);
-  setWError('');
-}, []);
 
 type Option = { label: string; value: string };
+
+/**
+ * Fallback statico: usa SOLO gli UUID (senza “-ROMA”, “-NECI”).
+ * Prendo i tuoi e rimuovo i suffissi.
+ */
+const STATIC_WAREHOUSES: Option[] = [
+  { label: 'Roma', value: '5630b7e1-becf-4f4e-8ed3-84f8c82f8bd4' },
+  { label: 'Neci', value: '16a1716a-e748-4895-bd38-9807e8fcaaf4' },
+];
 
 export default function Filters({
   onChange
@@ -45,34 +38,17 @@ export default function Filters({
   const [wLoading, setWLoading] = useState(true);
   const [wError, setWError] = useState('');
 
-  // anni: range semplice (evita errori se la tabella movimenti non esiste ancora)
+  // anni: range semplice
   useEffect(() => {
     const cur = new Date().getFullYear();
-    const arr = [cur + 1, cur, cur - 1, cur - 2, cur - 3]
-      .map(y => ({ label: String(y), value: String(y) }));
-    setYears(arr);
+    setYears([cur + 1, cur, cur - 1, cur - 2, cur - 3].map(y => ({ label: String(y), value: String(y) })));
   }, []);
 
-  // carica magazzini
+  // ► QUI: carico la lista statica (zero Supabase, zero policy)
   useEffect(() => {
-    (async () => {
-      setWLoading(true);
-      setWError('');
-      const { data, error, status } = await supabase
-        .from('warehouses')
-        .select('id,name')
-        .order('name');
-
-      console.log('warehouses fetch →', { status, error, rows: data?.length });
-
-      if (error) {
-        setWError(error.message);
-        setWarehouses([]);
-      } else {
-        setWarehouses((data ?? []).map(w => ({ label: w.name, value: w.id })));
-      }
-      setWLoading(false);
-    })();
+    setWarehouses(STATIC_WAREHOUSES);
+    setWLoading(false);
+    setWError('');
   }, []);
 
   // helper per inoltrare i cambi al padre
@@ -97,7 +73,6 @@ export default function Filters({
 
   return (
     <div className="space-y-3">
-      {/* eventuale messaggio di errore magazzini */}
       {wError && (
         <div className="text-sm text-red-600">
           Errore nel caricamento dei magazzini: {wError}
@@ -135,8 +110,8 @@ export default function Filters({
             <SelectValue placeholder="Lotto" />
           </SelectTrigger>
           <SelectContent>
-            {lots.map(l => (
-              <SelectItem key={l.value} value={l.value}>{l.label}</SelectItem>
+            {['A','B','C'].map(l => (
+              <SelectItem key={l} value={l}>Lotto {l}</SelectItem>
             ))}
           </SelectContent>
         </Select>
@@ -164,7 +139,7 @@ export default function Filters({
           value={warehouseId}
           onValueChange={(v) => {
             setWarehouseId(v);
-            pushChange({ warehouse_id: v });
+            pushChange({ warehouse_id: v }); // passerai l’UUID puro nelle query
           }}
           disabled={wLoading || !!wError}
         >
@@ -192,10 +167,9 @@ export default function Filters({
         </div>
       </div>
 
-      {/* suggerimento se non ci sono magazzini */}
       {!wLoading && !wError && warehouses.length === 0 && (
         <p className="text-xs text-muted-foreground">
-          Nessun magazzino disponibile. Verifica su <code>/debug/warehouses</code> o le policy RLS su <code>public.warehouses</code>.
+          Nessun magazzino disponibile.
         </p>
       )}
     </div>
