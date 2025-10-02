@@ -50,6 +50,9 @@ export default function Home() {
   const [fLot, setFLot] = useState<'all' | 'A' | 'B' | 'C'>('all');
   const [fSize, setFSize] = useState<'all' | string>('all');
 
+  // ── RECAP VARIANTE ─────────────────────────────────────────────
+  const [openVariantId, setOpenVariantId] = useState<string>('');
+
   const canInsert = useMemo(() => roles.includes('operator') || roles.includes('admin'), [roles]);
 
   const refreshStock = async () => {
@@ -76,7 +79,6 @@ export default function Home() {
   const stockVintages = useMemo(() => Array.from(new Set(stock.map(s => s.vintage))).sort((a, b) => b - a), [stock]);
   const stockLots = useMemo(() => Array.from(new Set(stock.map(s => s.lot_code))).sort(), [stock]);
   const stockSizes = useMemo(() => {
-    // ordina per ml, poi prendi label
     const ordered = [...stock].sort((a, b) => a.ml - b.ml);
     return Array.from(new Set(ordered.map(s => s.size_label)));
   }, [stock]);
@@ -146,7 +148,7 @@ export default function Home() {
         <StatCard label="Varianti (filtro)" value={stockFiltered.length.toString()} />
       </div>
 
-      {/* Giacenze con filtri */}
+      {/* Giacenze con filtri + Dettagli variante */}
       <div className="rounded-2xl border bg-white shadow-sm border-stone-200 dark:bg-stone-900 dark:border-stone-700">
         <div className="p-4 md:p-6 border-b border-stone-200 dark:border-stone-700 flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-lg md:text-xl font-semibold">Giacenze</h2>
@@ -163,7 +165,7 @@ export default function Home() {
             <select
               className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
               value={fLot}
-              onChange={e => setFLot(e.target.value as any)}
+              onChange={e => setFLot(e.target.value as 'all'|'A'|'B'|'C')}
             >
               <option value="all">Tutti i lotti</option>
               {stockLots.map(l => <option key={l} value={l}>{l}</option>)}
@@ -172,7 +174,7 @@ export default function Home() {
             <select
               className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
               value={fSize}
-              onChange={e => setFSize(e.target.value as any)}
+              onChange={e => setFSize(e.target.value as 'all'|string)}
             >
               <option value="all">Tutti i formati</option>
               {stockSizes.map(s => <option key={s} value={s}>{s}</option>)}
@@ -198,6 +200,7 @@ export default function Home() {
                 <th className="text-left p-2">Formato</th>
                 <th className="text-right p-2">Unità</th>
                 <th className="text-right p-2">Litri</th>
+                <th className="text-right p-2">Dettagli</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-200 dark:divide-stone-800">
@@ -208,13 +211,27 @@ export default function Home() {
                   <td className="p-2">{r.size_label}</td>
                   <td className="p-2 text-right">{r.units_on_hand}</td>
                   <td className="p-2 text-right">{r.liters_on_hand}</td>
+                  <td className="p-2 text-right">
+                    <button
+                      className={`text-sm underline ${openVariantId === r.variant_id ? 'text-amber-700 dark:text-amber-300' : 'text-stone-700 dark:text-stone-200'}`}
+                      onClick={() => setOpenVariantId(prev => prev === r.variant_id ? '' : r.variant_id)}
+                    >
+                      {openVariantId === r.variant_id ? 'Chiudi' : 'Dettagli'}
+                    </button>
+                  </td>
                 </tr>
               ))}
               {stockFiltered.length === 0 && (
-                <tr><td className="p-2 opacity-60" colSpan={5}>Nessuna variante per i filtri selezionati.</td></tr>
+                <tr><td className="p-2 opacity-60" colSpan={6}>Nessuna variante per i filtri selezionati.</td></tr>
               )}
             </tbody>
           </table>
+
+          {openVariantId && (
+            <div className="mt-6">
+              <VariantRecap variantId={openVariantId} onClose={() => setOpenVariantId('')} />
+            </div>
+          )}
         </div>
       </div>
 
@@ -233,7 +250,7 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Storico movimenti con filtri (aggiunti anche Lotto e Formato) */}
+      {/* Storico movimenti con ricerca & paginazione */}
       <div className="rounded-2xl border bg-white shadow-sm border-stone-200 dark:bg-stone-900 dark:border-stone-700">
         <MovementsLog
           reloadKey={reloadLog}
@@ -314,7 +331,6 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
     load();
   }, []);
 
-  // opzioni derivate dalla selezione corrente
   const formVintages = useMemo(() => Array.from(new Set(variants.map(v => v.vintage))).sort((a,b)=>b-a), [variants]);
   const formLots = useMemo(() => {
     const src = selVintage ? variants.filter(v => v.vintage === selVintage) : variants;
@@ -328,7 +344,6 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
     return Array.from(new Set(src.map(v => v.size_label)));
   }, [variants, selVintage, selLot]);
 
-  // quando cambia una selezione, calcola la variant
   useEffect(() => {
     if (selVintage && selLot && selSize) {
       const match = variants.find(v => v.vintage === selVintage && v.lot_code === selLot && v.size_label === selSize);
@@ -338,14 +353,13 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
     }
   }, [variants, selVintage, selLot, selSize]);
 
-  // Normalizzazione quantità
   const normalizeQty = (s: string): number => {
     const n = parseInt(s, 10);
     if (movement === 'adjust') {
-      if (Number.isNaN(n) || n === 0) return -1; // rettifica non può essere zero
+      if (Number.isNaN(n) || n === 0) return -1;
       return n;
     }
-    if (Number.isNaN(n) || n < 1) return 1; // in/out min 1
+    if (Number.isNaN(n) || n < 1) return 1;
     return n;
   };
 
@@ -363,8 +377,7 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
       setToast({ type:'err', msg: error.message });
     } else {
       setToast({ type:'ok', msg: 'Movimento registrato' });
-      setNote('');
-      setQtyInput(movement === 'adjust' ? '-1' : '1');
+      setNote(''); setQtyInput(movement === 'adjust' ? '-1' : '1');
       onInserted();
     }
     setTimeout(() => setToast(null), 2500);
@@ -385,7 +398,6 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
 
   return (
     <div className="space-y-4">
-      {/* segmented control */}
       <div className="inline-flex gap-2 rounded-xl p-1 border bg-stone-50
                       border-stone-200 dark:bg-stone-800/40 dark:border-stone-700">
         {mvBtn('in', 'Ingresso', 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/30 dark:border-green-800 dark:text-green-200')}
@@ -393,36 +405,29 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
         {mvBtn('adjust','Rettifica','bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-900/30 dark:border-amber-800 dark:text-amber-200')}
       </div>
 
-      {/* selezioni a cascata */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
-        {/* Annata */}
+      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
         <select
           className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
           value={selVintage ?? ''}
           onChange={e => {
             const v = e.target.value ? Number(e.target.value) : null;
-            setSelVintage(v);
-            // reset successivi livelli
-            setSelLot('');
-            setSelSize('');
+            setSelVintage(v); setSelLot(''); setSelSize('');
           }}
         >
           {formVintages.length === 0 && <option value="">(nessuna)</option>}
           {formVintages.map(v => <option key={v} value={v}>{v}</option>)}
         </select>
 
-        {/* Lotto */}
         <select
           className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
           value={selLot}
-          onChange={e => { setSelLot(e.target.value as any); setSelSize(''); }}
+          onChange={e => { setSelLot(e.target.value as 'A'|'B'|'C'|''); setSelSize(''); }}
           disabled={!selVintage}
         >
           {(!selVintage || formLots.length === 0) && <option value="">(seleziona annata)</option>}
           {formLots.map(l => <option key={l} value={l}>{l}</option>)}
         </select>
 
-        {/* Formato */}
         <select
           className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
           value={selSize}
@@ -433,7 +438,6 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
           {formSizes.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
 
-        {/* Quantità */}
         <input
           className="border rounded-lg p-2.5 bg-white border-stone-200
                      dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
@@ -457,18 +461,7 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
           onBlur={() => setQtyInput(String(normalizeQty(qtyInput)))}
           placeholder={movement === 'adjust' ? 'es. -3 per scarto' : 'Quantità'}
         />
-      </div>
 
-      {/* Nota + Salva */}
-      <div className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-3">
-        <input
-          className="border rounded-lg p-2.5 bg-white border-stone-200
-                     dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-          placeholder="Nota (facoltativa)"
-          value={note}
-          onChange={e=>setNote(e.target.value)}
-          onKeyDown={(e)=>{ if (e.key === 'Enter') submit(); }}
-        />
         <button
           onClick={submit}
           className="rounded-lg border px-4 py-2.5 bg-amber-600 text-white hover:bg-amber-700 shadow-sm disabled:opacity-60
@@ -479,6 +472,15 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
           {busy ? 'Salvataggio…' : 'Salva'}
         </button>
       </div>
+
+      <input
+        className="w-full border rounded-lg p-2.5 bg-white border-stone-200
+                   dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+        placeholder="Nota (facoltativa)"
+        value={note}
+        onChange={e=>setNote(e.target.value)}
+        onKeyDown={(e)=>{ if (e.key === 'Enter') submit(); }}
+      />
 
       {toast && (
         <div className={`fixed bottom-5 right-5 rounded-xl border px-4 py-2.5 shadow-lg
@@ -492,27 +494,52 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
   );
 }
 
-/* ====== Storico movimenti con filtri estesi ====== */
+/* ====== Storico movimenti: ricerca + paginazione ====== */
 function MovementsLog({ reloadKey, vintages, lots, sizes }: { reloadKey: number; vintages: number[]; lots: string[]; sizes: string[] }) {
+  const PAGE_SIZE = 50;
   const [rows, setRows] = useState<MovementLogRow[]>([]);
   const [mvType, setMvType] = useState<MovementType>('all');
   const [vintage, setVintage] = useState<number | 'all'>('all');
   const [lot, setLot] = useState<string | 'all'>('all');
   const [size, setSize] = useState<string | 'all'>('all');
+  const [q, setQ] = useState<string>(''); // search in note or operator_email
+
+  const [page, setPage] = useState<number>(1);
+  const [total, setTotal] = useState<number>(0);
+  const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const from = (page - 1) * PAGE_SIZE;
+  const to = from + PAGE_SIZE - 1;
 
   const refreshMovements = async () => {
-    let q = supabase.from('v_movements_detailed').select('*')
-      .order('created_at', { ascending: false }).limit(200);
-    if (mvType !== 'all') q = q.eq('movement', mvType);
-    if (vintage !== 'all') q = q.eq('vintage', vintage as number);
-    if (lot !== 'all') q = q.eq('lot_code', lot);
-    if (size !== 'all') q = q.eq('size_label', size);
-    const { data, error } = await q;
+    let query = supabase
+      .from('v_movements_detailed')
+      .select('*', { count: 'exact' })
+      .order('created_at', { ascending: false })
+      .range(from, to);
+
+    if (mvType !== 'all') query = query.eq('movement', mvType);
+    if (vintage !== 'all') query = query.eq('vintage', vintage as number);
+    if (lot !== 'all') query = query.eq('lot_code', lot);
+    if (size !== 'all') query = query.eq('size_label', size);
+    if (q.trim() !== '') {
+      const term = q.trim().replace(/%/g, '\\%').replace(/_/g, '\\_');
+      query = query.or(`note.ilike.%${term}%,operator_email.ilike.%${term}%`);
+    }
+
+    const { data, error, count } = await query;
     if (error) { console.error(error); return; }
     setRows((data ?? []) as MovementLogRow[]);
+    setTotal(count ?? 0);
   };
 
-  useEffect(() => { refreshMovements(); }, [reloadKey, mvType, vintage, lot, size]);
+  // debounce search & watchers
+  useEffect(() => {
+    const t = setTimeout(() => { setPage(1); }, 0); // reset page when filters change
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mvType, vintage, lot, size, q, reloadKey]);
+
+  useEffect(() => { refreshMovements(); }, [page, mvType, vintage, lot, size, q, reloadKey]);
 
   const csvEscape = (v: string) => `"${v.replace(/"/g, '""')}"`;
   const exportCsv = () => {
@@ -533,8 +560,16 @@ function MovementsLog({ reloadKey, vintages, lots, sizes }: { reloadKey: number;
                       flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <h2 className="text-lg md:text-xl font-semibold">📜 Movimenti (ultimi 200)</h2>
         <div className="flex items-center gap-2 flex-wrap">
+          <input
+            className="border rounded-lg p-2 text-sm bg-white border-stone-200
+                       dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+            placeholder="Cerca in Nota o Operatore…"
+            value={q}
+            onChange={e => { setQ(e.target.value); setPage(1); }}
+          />
+
           <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-                  value={mvType} onChange={e => setMvType(e.target.value as MovementType)}>
+                  value={mvType} onChange={e => { setMvType(e.target.value as MovementType); setPage(1); }}>
             <option value="all">Tutti i tipi</option>
             <option value="in">Ingresso</option>
             <option value="out">Uscita</option>
@@ -543,26 +578,26 @@ function MovementsLog({ reloadKey, vintages, lots, sizes }: { reloadKey: number;
 
           <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
                   value={vintage === 'all' ? 'all' : String(vintage)}
-                  onChange={e => setVintage(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
+                  onChange={e => { setVintage(e.target.value === 'all' ? 'all' : Number(e.target.value)); setPage(1); }}>
             <option value="all">Tutte le annate</option>
             {vintages.map(v => <option key={v} value={v}>{v}</option>)}
           </select>
 
           <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-                  value={lot} onChange={e => setLot(e.target.value)}>
+                  value={lot} onChange={e => { setLot(e.target.value); setPage(1); }}>
             <option value="all">Tutti i lotti</option>
             {lots.map(l => <option key={l} value={l}>{l}</option>)}
           </select>
 
           <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-                  value={size} onChange={e => setSize(e.target.value)}>
+                  value={size} onChange={e => { setSize(e.target.value); setPage(1); }}>
             <option value="all">Tutti i formati</option>
             {sizes.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
 
           <button className="rounded-lg border px-3 py-1.5 text-sm bg-white hover:bg-stone-50 shadow-sm
                              border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
-                  onClick={() => { setMvType('all'); setVintage('all'); setLot('all'); setSize('all'); }}>
+                  onClick={() => { setQ(''); setMvType('all'); setVintage('all'); setLot('all'); setSize('all'); setPage(1); }}>
             Azzera filtri
           </button>
           <button className="rounded-lg border px-3 py-1.5 text-sm bg-white hover:bg-stone-50 shadow-sm
@@ -604,8 +639,106 @@ function MovementsLog({ reloadKey, vintages, lots, sizes }: { reloadKey: number;
             )}
           </tbody>
         </table>
+
+        {/* Pagination */}
+        <div className="flex items-center justify-between mt-4 text-sm">
+          <div className="text-stone-600 dark:text-stone-300">
+            {total > 0
+              ? <>Mostra {Math.min(total, from + 1)}–{Math.min(total, to + 1)} di {total}</>
+              : <>Nessun risultato</>}
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
+                         border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700 disabled:opacity-50"
+              disabled={page <= 1}
+              onClick={() => setPage(p => Math.max(1, p - 1))}
+            >← Precedente</button>
+            <span className="min-w-[80px] text-center">Pag. {page}/{totalPages}</span>
+            <button
+              className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
+                         border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700 disabled:opacity-50"
+              disabled={page >= totalPages}
+              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+            >Successiva →</button>
+          </div>
+        </div>
       </div>
     </>
+  );
+}
+
+/* ====== Recap variante: ultimo (o ultimi 5) movimenti ====== */
+function VariantRecap({ variantId, onClose }: { variantId: string; onClose: () => void }) {
+  const [rows, setRows] = useState<MovementLogRow[]>([]);
+  const [limit, setLimit] = useState<number>(1);
+
+  const load = async () => {
+    const { data, error } = await supabase
+      .from('v_movements_detailed')
+      .select('*')
+      .eq('variant_id', variantId)
+      .order('created_at', { ascending: false })
+      .limit(limit);
+    if (error) { console.error(error); return; }
+    setRows((data ?? []) as MovementLogRow[]);
+  };
+
+  useEffect(() => { load(); }, [variantId, limit]);
+
+  const head = rows[0];
+  if (!head) return (
+    <div className="rounded-xl border p-4 text-sm border-stone-200 dark:border-stone-700">
+      Nessun movimento per questa variante. <button className="underline ml-2" onClick={onClose}>Chiudi</button>
+    </div>
+  );
+
+  return (
+    <div className="rounded-xl border p-4 md:p-5 border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900">
+      <div className="flex items-center justify-between">
+        <div className="text-sm">
+          <div className="font-semibold">Dettagli variante</div>
+          <div className="text-stone-500 dark:text-stone-400">
+            Annata {head.vintage} · Lotto {head.lot_code} · {head.size_label}
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            className="rounded-lg border px-3 py-1.5 text-sm bg-white hover:bg-stone-50 shadow-sm
+                       border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
+            onClick={() => setLimit(l => (l === 1 ? 5 : 1))}
+          >
+            {limit === 1 ? 'Mostra ultimi 5' : 'Mostra ultimo'}
+          </button>
+          <button className="text-sm underline" onClick={onClose}>Chiudi</button>
+        </div>
+      </div>
+
+      <div className="mt-4 overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b font-medium text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-700">
+              <th className="text-left p-2">Data</th>
+              <th className="text-left p-2">Tipo</th>
+              <th className="text-right p-2">Qtà</th>
+              <th className="text-left p-2">Nota</th>
+              <th className="text-left p-2">Operatore</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-stone-200 dark:divide-stone-800">
+            {rows.map(r => (
+              <tr key={r.id}>
+                <td className="p-2">{new Date(r.created_at).toLocaleString()}</td>
+                <td className="p-2"><TypeBadge type={r.movement} /></td>
+                <td className="p-2 text-right">{r.quantity_units}</td>
+                <td className="p-2">{r.note}</td>
+                <td className="p-2">{r.operator_email ?? ''}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
   );
 }
 
