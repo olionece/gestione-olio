@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { supabase } from '@/lib/supabaseClient'; // <-- se non hai l'alias "@", usa: ../../lib/supabaseClient
+import { supabase } from '/lib/supabaseClient'; 
 import {
   Select,
   SelectTrigger,
