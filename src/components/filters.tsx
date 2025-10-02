@@ -10,6 +10,21 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
+// --- IN CIMA al file (sotto gli import)
+const STATIC_WAREHOUSES = [
+  { label: 'Roma', value: '5630b7e1-becf-4f4e-8ed3-84f8c82f8bd4-ROMA' },
+  { label: 'Neci', value: '16a1716a-e748-4895-bd38-9807e8fcaaf4-NECI' },
+];
+
+// ...
+
+// --- SOSTITUISCI questo effect al posto di quello che fa la select su Supabase
+useEffect(() => {
+  // usa lista statica per sbloccare subito la UI
+  setWarehouses(STATIC_WAREHOUSES);
+  setWLoading(false);
+  setWError('');
+}, []);
 
 type Option = { label: string; value: string };
 
