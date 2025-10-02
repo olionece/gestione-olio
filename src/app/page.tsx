@@ -755,3 +755,63 @@ function TypeBadge({ type }: { type: 'in'|'out'|'adjust' }) {
     </span>
   );
 }
+import { useEffect, useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
+import Filters from './components/Filters';
+
+const supabase = createClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!);
+
+export default function Page() {
+  const [filters, setFilters] = useState<{year?: string; lot?: string; format_ml?: string; warehouse_id?: string}>({});
+  const [rows, setRows] = useState<any[]>([]);
+
+  useEffect(() => {
+    (async () => {
+      let q = supabase.from('v_current_stock').select(`
+        year, lot, format_ml, qty_ml, warehouse_id,
+        warehouses!inner(name)
+      `).order('year', { ascending: false });
+
+      if (filters.year) q = q.eq('year', Number(filters.year));
+      if (filters.lot) q = q.eq('lot', filters.lot);
+      if (filters.format_ml) q = q.eq('format_ml', Number(filters.format_ml));
+      if (filters.warehouse_id) q = q.eq('warehouse_id', filters.warehouse_id);
+
+      const { data } = await q;
+      setRows(data ?? []);
+    })();
+  }, [filters]);
+
+  return (
+    <main className="p-6 space-y-6">
+      <h1 className="text-2xl font-semibold">Giacenze Olio</h1>
+      <Filters onChange={(f) => setFilters(prev => ({ ...prev, ...f }))} />
+      <div className="overflow-auto rounded-2xl border p-3">
+        <table className="min-w-full text-sm">
+          <thead>
+            <tr className="text-left">
+              <th className="p-2">Annata</th>
+              <th className="p-2">Lotto</th>
+              <th className="p-2">Formato</th>
+              <th className="p-2">Magazzino</th>
+              <th className="p-2">Quantità (ml)</th>
+              <th className="p-2">Bottiglie</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className="border-t">
+                <td className="p-2">{r.year}</td>
+                <td className="p-2">{r.lot}</td>
+                <td className="p-2">{r.format_ml === 5000 ? '5 L' : `${r.format_ml} ml`}</td>
+                <td className="p-2">{r.warehouses?.name ?? r.warehouse_id}</td>
+                <td className="p-2">{r.qty_ml}</td>
+                <td className="p-2">{Math.floor(r.qty_ml / r.format_ml)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </main>
+  );
+}
