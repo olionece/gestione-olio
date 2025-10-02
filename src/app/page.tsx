@@ -756,8 +756,6 @@ function TypeBadge({ type }: { type: 'in'|'out'|'adjust' }) {
   );
 }
 import { useEffect, useState } from 'react';
-console.log('SUPABASE_URL', process.env.NEXT_PUBLIC_SUPABASE_URL?.slice(0, 28));
-console.log('ANON_KEY_START', process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY?.slice(0, 10));
 import { createClient } from '@supabase/supabase-js';
 import Filters from './components/Filters';
 
