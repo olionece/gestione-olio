@@ -15,6 +15,7 @@ type StockRow = {
   variant_id: string; lot_id: string; lot_code: string; vintage: number;
   size_id: string; size_label: string; ml: number;
   units_on_hand: number; liters_on_hand: number;
+  warehouse_id?: string | null; warehouse_name?: string | null; // presenti solo nella vista per-magazzino
 };
 
 type VariantRow = {
@@ -27,7 +28,10 @@ type MovementLogRow = {
   quantity_units: number; note: string | null; variant_id: string;
   vintage: number; lot_code: string; size_label: string; ml: number;
   created_by: string | null; operator_email: string | null;
+  warehouse_id: string; warehouse_name: string;
 };
+
+type WarehouseRow = { id: string; name: string };
 
 function useSession(): Session | null {
   const [session, setSession] = useState<Session | null>(null);
@@ -41,41 +45,61 @@ function useSession(): Session | null {
 
 export default function Home() {
   const session = useSession();
-  const [stock, setStock] = useState<StockRow[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
-  const [reloadLog, setReloadLog] = useState<number>(0);
+  const [stock, setStock] = useState<StockRow[]>([]);
+  const [warehouses, setWarehouses] = useState<WarehouseRow[]>([]);
+  const [wh, setWh] = useState<'all' | string>('all'); // selezione magazzino (Tutti / id)
 
-  // ── FILTRI GIACENZE ─────────────────────────────────────────────
+  // Filtri giacenze aggiuntivi
   const [fVintage, setFVintage] = useState<number | 'all'>('all');
   const [fLot, setFLot] = useState<'all' | 'A' | 'B' | 'C'>('all');
   const [fSize, setFSize] = useState<'all' | string>('all');
 
-  // ── RECAP VARIANTE ─────────────────────────────────────────────
-  const [openVariantId, setOpenVariantId] = useState<string>('');
+  const [reloadLog, setReloadLog] = useState<number>(0);
 
   const canInsert = useMemo(() => roles.includes('operator') || roles.includes('admin'), [roles]);
 
+  // carica ruoli e magazzini
+  useEffect(() => {
+    if (!session) return;
+    (async () => {
+      const { data: r1 } = await supabase.from('user_roles').select('role').eq('user_id', session.user.id);
+      setRoles(((r1 ?? []) as UserRoleRow[]).map(r => r.role));
+      const { data: w } = await supabase.from('warehouses').select('id,name').order('name');
+      setWarehouses((w ?? []) as WarehouseRow[]);
+    })();
+  }, [session]);
+
+  // carica giacenze aggregate o per magazzino
   const refreshStock = async () => {
-    const { data, error } = await supabase
-      .from('v_stock_detailed').select('*')
-      .order('vintage', { ascending: false })
-      .order('lot_code', { ascending: true })
-      .order('ml', { ascending: true });
-    if (error) { console.error(error); return; }
-    setStock((data ?? []) as StockRow[]);
+    if (wh === 'all') {
+      const { data, error } = await supabase
+        .from('v_stock_detailed_sum')
+        .select('*')
+        .order('vintage', { ascending: false })
+        .order('lot_code', { ascending: true })
+        .order('ml', { ascending: true });
+      if (error) { console.error(error); return; }
+      setStock((data ?? []) as StockRow[]);
+    } else {
+      const { data, error } = await supabase
+        .from('v_stock_detailed_wh')
+        .select('*')
+        .eq('warehouse_id', wh)
+        .order('vintage', { ascending: false })
+        .order('lot_code', { ascending: true })
+        .order('ml', { ascending: true });
+      if (error) { console.error(error); return; }
+      setStock((data ?? []) as StockRow[]);
+    }
   };
 
   useEffect(() => {
-    const load = async () => {
-      if (!session) return;
-      const { data: r1 } = await supabase.from('user_roles').select('role').eq('user_id', session.user.id);
-      setRoles(((r1 ?? []) as UserRoleRow[]).map(r => r.role));
-      await refreshStock();
-    };
-    load();
-  }, [session]);
+    if (!session) return;
+    void refreshStock();
+  }, [session, wh]);
 
-  // Opzioni uniche per i filtri giacenze
+  // opzioni per filtri giacenze
   const stockVintages = useMemo(() => Array.from(new Set(stock.map(s => s.vintage))).sort((a, b) => b - a), [stock]);
   const stockLots = useMemo(() => Array.from(new Set(stock.map(s => s.lot_code))).sort(), [stock]);
   const stockSizes = useMemo(() => {
@@ -83,7 +107,6 @@ export default function Home() {
     return Array.from(new Set(ordered.map(s => s.size_label)));
   }, [stock]);
 
-  // Applica filtri alla tabella giacenze
   const stockFiltered = useMemo(() => {
     return stock.filter(s =>
       (fVintage === 'all' || s.vintage === fVintage) &&
@@ -124,7 +147,7 @@ export default function Home() {
             </span>
           </h1>
           <p className="text-sm text-stone-500 dark:text-stone-400">
-            Magazzino annate 2024–2025 · Lotti A/B/C · Formati 250/500 ml e 5 L
+            Magazzini: {warehouses.map(w => w.name).join(' · ') || '—'}
           </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -143,16 +166,27 @@ export default function Home() {
 
       {/* Stat cards (sui dati filtrati) */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <StatCard label="Litri (filtro)" value={`${totals.liters.toLocaleString(undefined, { maximumFractionDigits: 2 })} L`} />
+        <StatCard label={`Litri (${wh === 'all' ? 'tutti i magazzini' : (warehouses.find(x=>x.id===wh)?.name || 'magazzino')})`} value={`${totals.liters.toLocaleString(undefined, { maximumFractionDigits: 2 })} L`} />
         <StatCard label="Unità (filtro)" value={totals.units.toLocaleString()} />
         <StatCard label="Varianti (filtro)" value={stockFiltered.length.toString()} />
       </div>
 
-      {/* Giacenze con filtri + Dettagli variante */}
+      {/* Giacenze + Filtri (incluso Magazzino) */}
       <div className="rounded-2xl border bg-white shadow-sm border-stone-200 dark:bg-stone-900 dark:border-stone-700">
         <div className="p-4 md:p-6 border-b border-stone-200 dark:border-stone-700 flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-lg md:text-xl font-semibold">Giacenze</h2>
           <div className="flex items-center gap-2 flex-wrap text-sm">
+            {/* Magazzino */}
+            <select
+              className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+              value={wh}
+              onChange={e => setWh(e.target.value)}
+              title="Filtra per magazzino"
+            >
+              <option value="all">Tutti i magazzini</option>
+              {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+            </select>
+            {/* Annata */}
             <select
               className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
               value={fVintage === 'all' ? 'all' : String(fVintage)}
@@ -161,7 +195,7 @@ export default function Home() {
               <option value="all">Tutte le annate</option>
               {stockVintages.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
-
+            {/* Lotto */}
             <select
               className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
               value={fLot}
@@ -170,7 +204,7 @@ export default function Home() {
               <option value="all">Tutti i lotti</option>
               {stockLots.map(l => <option key={l} value={l}>{l}</option>)}
             </select>
-
+            {/* Formato */}
             <select
               className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
               value={fSize}
@@ -179,7 +213,7 @@ export default function Home() {
               <option value="all">Tutti i formati</option>
               {stockSizes.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-
+            {/* Reset */}
             <button
               className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
                          border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
@@ -195,75 +229,62 @@ export default function Home() {
             <thead className="sticky top-0 bg-white/80 backdrop-blur supports-[backdrop-filter]:bg-white/60
                               dark:bg-stone-900/80 dark:supports-[backdrop-filter]:bg-stone-900/60">
               <tr className="border-b font-medium text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-700">
+                {wh !== 'all' && <th className="text-left p-2">Magazzino</th>}
                 <th className="text-left p-2">Annata</th>
                 <th className="text-left p-2">Lotto</th>
                 <th className="text-left p-2">Formato</th>
                 <th className="text-right p-2">Unità</th>
                 <th className="text-right p-2">Litri</th>
-                <th className="text-right p-2">Dettagli</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-stone-200 dark:divide-stone-800">
               {stockFiltered.map((r) => (
-                <tr key={r.variant_id} className="hover:bg-amber-50/40 dark:hover:bg-stone-800/40">
+                <tr key={`${r.variant_id}-${r.warehouse_id ?? 'sum'}`} className="hover:bg-amber-50/40 dark:hover:bg-stone-800/40">
+                  {wh !== 'all' && <td className="p-2">{r.warehouse_name}</td>}
                   <td className="p-2">{r.vintage}</td>
                   <td className="p-2">{r.lot_code}</td>
                   <td className="p-2">{r.size_label}</td>
                   <td className="p-2 text-right">{r.units_on_hand}</td>
                   <td className="p-2 text-right">{r.liters_on_hand}</td>
-                  <td className="p-2 text-right">
-                    <button
-                      className={`text-sm underline ${openVariantId === r.variant_id ? 'text-amber-700 dark:text-amber-300' : 'text-stone-700 dark:text-stone-200'}`}
-                      onClick={() => setOpenVariantId(prev => prev === r.variant_id ? '' : r.variant_id)}
-                    >
-                      {openVariantId === r.variant_id ? 'Chiudi' : 'Dettagli'}
-                    </button>
-                  </td>
                 </tr>
               ))}
               {stockFiltered.length === 0 && (
-                <tr><td className="p-2 opacity-60" colSpan={6}>Nessuna variante per i filtri selezionati.</td></tr>
+                <tr><td className="p-2 opacity-60" colSpan={wh !== 'all' ? 6 : 5}>Nessuna variante per i filtri selezionati.</td></tr>
               )}
             </tbody>
           </table>
-
-          {openVariantId && (
-            <div className="mt-6">
-              <VariantRecap variantId={openVariantId} onClose={() => setOpenVariantId('')} />
-            </div>
-          )}
         </div>
       </div>
 
-      {/* Form movimenti con selezione a cascata Annata → Lotto → Formato */}
+      {/* Form movimenti (include magazzino) */}
       <div className="rounded-2xl border bg-white shadow-sm border-stone-200 dark:bg-stone-900 dark:border-stone-700">
         <div className="p-4 md:p-6 border-b border-stone-200 dark:border-stone-700">
           <h2 className="text-lg md:text-xl font-semibold">Registra movimento</h2>
           <p className="text-xs text-stone-500 dark:text-stone-400 mt-1">
-            Usa Rettifica per correzioni inventariali (può essere negativa). Scegli annata, lotto e formato per identificare la variante.
+            Scegli magazzino, annata, lotto e formato. Usa Rettifica per correzioni (può essere negativa).
           </p>
         </div>
         <div className="p-4 md:p-6">
           <MovementForm
+            warehouses={warehouses}
+            wh={wh}
             onInserted={async () => { await refreshStock(); setReloadLog(n => n + 1); }}
           />
         </div>
       </div>
 
-      {/* Storico movimenti con ricerca & paginazione */}
+      {/* Storico movimenti con filtro Magazzino */}
       <div className="rounded-2xl border bg-white shadow-sm border-stone-200 dark:bg-stone-900 dark:border-stone-700">
         <MovementsLog
           reloadKey={reloadLog}
-          vintages={stockVintages}
-          lots={stockLots}
-          sizes={stockSizes}
+          warehouses={warehouses}
         />
       </div>
     </div>
   );
 }
 
-/* ====== piccoli componenti UI ====== */
+/* ====== UI helpers ====== */
 function RolesChips({ roles }: { roles: Role[] }) {
   const map: Record<Role, { txt: string; cls: string }> = {
     admin:    { txt: 'admin',    cls: 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-900/30 dark:text-purple-200 dark:border-purple-800' },
@@ -298,9 +319,15 @@ function StatCard({ label, value }: { label: string; value: string }) {
   );
 }
 
-/* ====== Form movimenti con menu a tendina a cascata ====== */
-function MovementForm({ onInserted }: { onInserted: () => void }) {
+/* ====== Form movimenti (warehouse + cascata variante) ====== */
+function MovementForm({ onInserted, warehouses, wh }: {
+  onInserted: () => void;
+  warehouses: WarehouseRow[];
+  wh: 'all' | string;
+}) {
   const [variants, setVariants] = useState<VariantRow[]>([]);
+  const [warehouseId, setWarehouseId] = useState<string>('');
+
   // selezioni a cascata
   const [selVintage, setSelVintage] = useState<number | null>(null);
   const [selLot, setSelLot] = useState<'A'|'B'|'C' | ''>('');
@@ -312,10 +339,12 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
   const [busy, setBusy] = useState<boolean>(false);
   const [toast, setToast] = useState<{type:'ok'|'err'; msg:string} | null>(null);
 
+  // carica varianti
   useEffect(() => {
-    const load = async () => {
+    (async () => {
       const { data, error } = await supabase
-        .from('v_stock_units').select('*')
+        .from('v_stock_units') // base (senza magazzino), serve solo per lista varianti
+        .select('*')
         .order('vintage', { ascending: false })
         .order('lot_code', { ascending: true })
         .order('ml', { ascending: true });
@@ -327,10 +356,16 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
         setSelLot(rows[0].lot_code as 'A'|'B'|'C');
         setSelSize(rows[0].size_label);
       }
-    };
-    load();
+    })();
   }, []);
 
+  // imposta magazzino default
+  useEffect(() => {
+    if (wh !== 'all') setWarehouseId(wh);
+    else if (warehouses[0]) setWarehouseId(warehouses[0].id);
+  }, [wh, warehouses]);
+
+  // opzioni derivate
   const formVintages = useMemo(() => Array.from(new Set(variants.map(v => v.vintage))).sort((a,b)=>b-a), [variants]);
   const formLots = useMemo(() => {
     const src = selVintage ? variants.filter(v => v.vintage === selVintage) : variants;
@@ -344,6 +379,7 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
     return Array.from(new Set(src.map(v => v.size_label)));
   }, [variants, selVintage, selLot]);
 
+  // calcola variant
   useEffect(() => {
     if (selVintage && selLot && selSize) {
       const match = variants.find(v => v.vintage === selVintage && v.lot_code === selLot && v.size_label === selSize);
@@ -364,20 +400,24 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
   };
 
   const submit = async () => {
-    if (!variantId || busy) return;
+    if (!variantId || !warehouseId || busy) return;
     setBusy(true);
     const qty = normalizeQty(qtyInput);
     const { data: userData } = await supabase.auth.getUser();
     const { error } = await supabase.from('inventory_movements').insert({
-      variant_id: variantId, movement, quantity_units: qty,
-      note: note || null, created_by: userData.user?.id ?? null
+      variant_id: variantId,
+      movement, quantity_units: qty,
+      warehouse_id: warehouseId,
+      note: note || null,
+      created_by: userData.user?.id ?? null
     });
     setBusy(false);
     if (error) {
       setToast({ type:'err', msg: error.message });
     } else {
       setToast({ type:'ok', msg: 'Movimento registrato' });
-      setNote(''); setQtyInput(movement === 'adjust' ? '-1' : '1');
+      setNote('');
+      setQtyInput(movement === 'adjust' ? '-1' : '1');
       onInserted();
     }
     setTimeout(() => setToast(null), 2500);
@@ -398,6 +438,7 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
 
   return (
     <div className="space-y-4">
+      {/* segmented control */}
       <div className="inline-flex gap-2 rounded-xl p-1 border bg-stone-50
                       border-stone-200 dark:bg-stone-800/40 dark:border-stone-700">
         {mvBtn('in', 'Ingresso', 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/30 dark:border-green-800 dark:text-green-200')}
@@ -405,39 +446,55 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
         {mvBtn('adjust','Rettifica','bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-900/30 dark:border-amber-800 dark:text-amber-200')}
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+        {/* Magazzino */}
+        <select
+          className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+          value={warehouseId}
+          onChange={e => setWarehouseId(e.target.value)}
+          disabled={wh !== 'all'} // se stai filtrando per un magazzino, blocca la select
+          title="Magazzino"
+        >
+          {(wh === 'all' ? warehouses : warehouses.filter(w => w.id === wh))
+            .map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+        </select>
+
+        {/* Annata */}
         <select
           className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
           value={selVintage ?? ''}
-          onChange={e => {
-            const v = e.target.value ? Number(e.target.value) : null;
-            setSelVintage(v); setSelLot(''); setSelSize('');
-          }}
+          onChange={e => { const v = e.target.value ? Number(e.target.value) : null; setSelVintage(v); setSelLot(''); setSelSize(''); }}
+          title="Annata"
         >
           {formVintages.length === 0 && <option value="">(nessuna)</option>}
           {formVintages.map(v => <option key={v} value={v}>{v}</option>)}
         </select>
 
+        {/* Lotto */}
         <select
           className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
           value={selLot}
           onChange={e => { setSelLot(e.target.value as 'A'|'B'|'C'|''); setSelSize(''); }}
           disabled={!selVintage}
+          title="Lotto"
         >
           {(!selVintage || formLots.length === 0) && <option value="">(seleziona annata)</option>}
           {formLots.map(l => <option key={l} value={l}>{l}</option>)}
         </select>
 
+        {/* Formato */}
         <select
           className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
           value={selSize}
           onChange={e => setSelSize(e.target.value)}
           disabled={!selVintage || !selLot}
+          title="Formato"
         >
           {(!selVintage || !selLot || formSizes.length === 0) && <option value="">(seleziona lotto)</option>}
           {formSizes.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
 
+        {/* Quantità */}
         <input
           className="border rounded-lg p-2.5 bg-white border-stone-200
                      dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
@@ -462,25 +519,17 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
           placeholder={movement === 'adjust' ? 'es. -3 per scarto' : 'Quantità'}
         />
 
+        {/* Salva */}
         <button
           onClick={submit}
           className="rounded-lg border px-4 py-2.5 bg-amber-600 text-white hover:bg-amber-700 shadow-sm disabled:opacity-60
                      border-amber-700 dark:border-amber-700"
-          disabled={busy || !variantId}
-          title={!variantId ? 'Seleziona annata, lotto e formato' : 'Salva movimento'}
+          disabled={busy || !variantId || !warehouseId}
+          title={!variantId ? 'Seleziona annata, lotto e formato' : (!warehouseId ? 'Seleziona magazzino' : 'Salva movimento')}
         >
           {busy ? 'Salvataggio…' : 'Salva'}
         </button>
       </div>
-
-      <input
-        className="w-full border rounded-lg p-2.5 bg-white border-stone-200
-                   dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-        placeholder="Nota (facoltativa)"
-        value={note}
-        onChange={e=>setNote(e.target.value)}
-        onKeyDown={(e)=>{ if (e.key === 'Enter') submit(); }}
-      />
 
       {toast && (
         <div className={`fixed bottom-5 right-5 rounded-xl border px-4 py-2.5 shadow-lg
@@ -494,15 +543,16 @@ function MovementForm({ onInserted }: { onInserted: () => void }) {
   );
 }
 
-/* ====== Storico movimenti: ricerca + paginazione ====== */
-function MovementsLog({ reloadKey, vintages, lots, sizes }: { reloadKey: number; vintages: number[]; lots: string[]; sizes: string[] }) {
+/* ====== Storico movimenti (aggiunto filtro Magazzino) ====== */
+function MovementsLog({ reloadKey, warehouses }: { reloadKey: number; warehouses: WarehouseRow[] }) {
   const PAGE_SIZE = 50;
   const [rows, setRows] = useState<MovementLogRow[]>([]);
   const [mvType, setMvType] = useState<MovementType>('all');
   const [vintage, setVintage] = useState<number | 'all'>('all');
   const [lot, setLot] = useState<string | 'all'>('all');
   const [size, setSize] = useState<string | 'all'>('all');
-  const [q, setQ] = useState<string>(''); // search in note or operator_email
+  const [warehouse, setWarehouse] = useState<'all' | string>('all');
+  const [q, setQ] = useState<string>('');
 
   const [page, setPage] = useState<number>(1);
   const [total, setTotal] = useState<number>(0);
@@ -521,6 +571,7 @@ function MovementsLog({ reloadKey, vintages, lots, sizes }: { reloadKey: number;
     if (vintage !== 'all') query = query.eq('vintage', vintage as number);
     if (lot !== 'all') query = query.eq('lot_code', lot);
     if (size !== 'all') query = query.eq('size_label', size);
+    if (warehouse !== 'all') query = query.eq('warehouse_id', warehouse);
     if (q.trim() !== '') {
       const term = q.trim().replace(/%/g, '\\%').replace(/_/g, '\\_');
       query = query.or(`note.ilike.%${term}%,operator_email.ilike.%${term}%`);
@@ -532,21 +583,15 @@ function MovementsLog({ reloadKey, vintages, lots, sizes }: { reloadKey: number;
     setTotal(count ?? 0);
   };
 
-  // debounce search & watchers
-  useEffect(() => {
-    const t = setTimeout(() => { setPage(1); }, 0); // reset page when filters change
-    return () => clearTimeout(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [mvType, vintage, lot, size, q, reloadKey]);
-
-  useEffect(() => { refreshMovements(); }, [page, mvType, vintage, lot, size, q, reloadKey]);
+  useEffect(() => { setPage(1); }, [mvType, vintage, lot, size, warehouse, q, reloadKey]);
+  useEffect(() => { void refreshMovements(); }, [page, mvType, vintage, lot, size, warehouse, q, reloadKey]);
 
   const csvEscape = (v: string) => `"${v.replace(/"/g, '""')}"`;
   const exportCsv = () => {
-    const header = ['Data','Tipo','Annata','Lotto','Formato','Qtà','Nota','Operatore','Variante'];
+    const header = ['Data','Tipo','Annata','Lotto','Formato','Qtà','Nota','Operatore','Magazzino','Variante'];
     const lines = rows.map(r => [
       new Date(r.created_at).toLocaleString(), r.movement, String(r.vintage), r.lot_code,
-      r.size_label, String(r.quantity_units), r.note ?? '', r.operator_email ?? '', r.variant_id
+      r.size_label, String(r.quantity_units), r.note ?? '', r.operator_email ?? '', r.warehouse_name ?? '', r.variant_id
     ].map(x => csvEscape(String(x))).join(','));
     const csv = header.map(csvEscape).join(',') + '\n' + lines.join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -565,11 +610,11 @@ function MovementsLog({ reloadKey, vintages, lots, sizes }: { reloadKey: number;
                        dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
             placeholder="Cerca in Nota o Operatore…"
             value={q}
-            onChange={e => { setQ(e.target.value); setPage(1); }}
+            onChange={e => setQ(e.target.value)}
           />
 
           <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-                  value={mvType} onChange={e => { setMvType(e.target.value as MovementType); setPage(1); }}>
+                  value={mvType} onChange={e => setMvType(e.target.value as MovementType)}>
             <option value="all">Tutti i tipi</option>
             <option value="in">Ingresso</option>
             <option value="out">Uscita</option>
@@ -577,27 +622,34 @@ function MovementsLog({ reloadKey, vintages, lots, sizes }: { reloadKey: number;
           </select>
 
           <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+                  value={warehouse} onChange={e => setWarehouse(e.target.value)}>
+            <option value="all">Tutti i magazzini</option>
+            {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
+          </select>
+
+          <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
                   value={vintage === 'all' ? 'all' : String(vintage)}
-                  onChange={e => { setVintage(e.target.value === 'all' ? 'all' : Number(e.target.value)); setPage(1); }}>
+                  onChange={e => setVintage(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
             <option value="all">Tutte le annate</option>
-            {vintages.map(v => <option key={v} value={v}>{v}</option>)}
+            {/* Valori dinamici: per prestazioni, potresti caricarli server-side; qui li lasciamo liberi */}
+            {[...new Set(rows.map(r => r.vintage))].sort((a,b)=>Number(b)-Number(a)).map(v => <option key={v} value={v}>{v}</option>)}
           </select>
 
           <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-                  value={lot} onChange={e => { setLot(e.target.value); setPage(1); }}>
+                  value={lot} onChange={e => setLot(e.target.value)}>
             <option value="all">Tutti i lotti</option>
-            {lots.map(l => <option key={l} value={l}>{l}</option>)}
+            {[...new Set(rows.map(r => r.lot_code))].sort().map(l => <option key={l} value={l}>{l}</option>)}
           </select>
 
           <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-                  value={size} onChange={e => { setSize(e.target.value); setPage(1); }}>
+                  value={size} onChange={e => setSize(e.target.value)}>
             <option value="all">Tutti i formati</option>
-            {sizes.map(s => <option key={s} value={s}>{s}</option>)}
+            {[...new Set(rows.map(r => r.size_label))].sort().map(s => <option key={s} value={s}>{s}</option>)}
           </select>
 
           <button className="rounded-lg border px-3 py-1.5 text-sm bg-white hover:bg-stone-50 shadow-sm
                              border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
-                  onClick={() => { setQ(''); setMvType('all'); setVintage('all'); setLot('all'); setSize('all'); setPage(1); }}>
+                  onClick={() => { setQ(''); setMvType('all'); setWarehouse('all'); setVintage('all'); setLot('all'); setSize('all'); setPage(1); }}>
             Azzera filtri
           </button>
           <button className="rounded-lg border px-3 py-1.5 text-sm bg-white hover:bg-stone-50 shadow-sm
@@ -613,6 +665,7 @@ function MovementsLog({ reloadKey, vintages, lots, sizes }: { reloadKey: number;
             <tr className="border-b font-medium text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-700">
               <th className="text-left p-2">Data</th>
               <th className="text-left p-2">Tipo</th>
+              <th className="text-left p-2">Magazzino</th>
               <th className="text-left p-2">Annata</th>
               <th className="text-left p-2">Lotto</th>
               <th className="text-left p-2">Formato</th>
@@ -626,6 +679,7 @@ function MovementsLog({ reloadKey, vintages, lots, sizes }: { reloadKey: number;
               <tr key={r.id} className="hover:bg-amber-50/40 dark:hover:bg-stone-800/40">
                 <td className="p-2">{new Date(r.created_at).toLocaleString()}</td>
                 <td className="p-2"><TypeBadge type={r.movement} /></td>
+                <td className="p-2">{r.warehouse_name}</td>
                 <td className="p-2">{r.vintage}</td>
                 <td className="p-2">{r.lot_code}</td>
                 <td className="p-2">{r.size_label}</td>
@@ -635,108 +689,48 @@ function MovementsLog({ reloadKey, vintages, lots, sizes }: { reloadKey: number;
               </tr>
             ))}
             {rows.length === 0 && (
-              <tr><td className="p-2 opacity-60" colSpan={8}>Nessun movimento trovato per i filtri selezionati.</td></tr>
+              <tr><td className="p-2 opacity-60" colSpan={9}>Nessun movimento trovato per i filtri selezionati.</td></tr>
             )}
           </tbody>
         </table>
 
         {/* Pagination */}
-        <div className="flex items-center justify-between mt-4 text-sm">
-          <div className="text-stone-600 dark:text-stone-300">
-            {total > 0
-              ? <>Mostra {Math.min(total, from + 1)}–{Math.min(total, to + 1)} di {total}</>
-              : <>Nessun risultato</>}
-          </div>
-          <div className="flex items-center gap-2">
-            <button
-              className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
-                         border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700 disabled:opacity-50"
-              disabled={page <= 1}
-              onClick={() => setPage(p => Math.max(1, p - 1))}
-            >← Precedente</button>
-            <span className="min-w-[80px] text-center">Pag. {page}/{totalPages}</span>
-            <button
-              className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
-                         border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700 disabled:opacity-50"
-              disabled={page >= totalPages}
-              onClick={() => setPage(p => Math.min(totalPages, p + 1))}
-            >Successiva →</button>
-          </div>
-        </div>
+        <Pagination
+          page={page}
+          total={total}
+          pageSize={PAGE_SIZE}
+          onPrev={() => setPage(p => Math.max(1, p - 1))}
+          onNext={() => setPage(p => Math.min(Math.max(1, Math.ceil(total / PAGE_SIZE)), p + 1))}
+        />
       </div>
     </>
   );
 }
 
-/* ====== Recap variante: ultimo (o ultimi 5) movimenti ====== */
-function VariantRecap({ variantId, onClose }: { variantId: string; onClose: () => void }) {
-  const [rows, setRows] = useState<MovementLogRow[]>([]);
-  const [limit, setLimit] = useState<number>(1);
-
-  const load = async () => {
-    const { data, error } = await supabase
-      .from('v_movements_detailed')
-      .select('*')
-      .eq('variant_id', variantId)
-      .order('created_at', { ascending: false })
-      .limit(limit);
-    if (error) { console.error(error); return; }
-    setRows((data ?? []) as MovementLogRow[]);
-  };
-
-  useEffect(() => { load(); }, [variantId, limit]);
-
-  const head = rows[0];
-  if (!head) return (
-    <div className="rounded-xl border p-4 text-sm border-stone-200 dark:border-stone-700">
-      Nessun movimento per questa variante. <button className="underline ml-2" onClick={onClose}>Chiudi</button>
-    </div>
-  );
-
+/* ====== piccoli componenti ====== */
+function Pagination({ page, total, pageSize, onPrev, onNext }: { page: number; total: number; pageSize: number; onPrev: () => void; onNext: () => void; }) {
+  const totalPages = Math.max(1, Math.ceil(total / pageSize));
+  const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
+  const to = Math.min(total, page * pageSize);
   return (
-    <div className="rounded-xl border p-4 md:p-5 border-stone-200 dark:border-stone-700 bg-white dark:bg-stone-900">
-      <div className="flex items-center justify-between">
-        <div className="text-sm">
-          <div className="font-semibold">Dettagli variante</div>
-          <div className="text-stone-500 dark:text-stone-400">
-            Annata {head.vintage} · Lotto {head.lot_code} · {head.size_label}
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            className="rounded-lg border px-3 py-1.5 text-sm bg-white hover:bg-stone-50 shadow-sm
-                       border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
-            onClick={() => setLimit(l => (l === 1 ? 5 : 1))}
-          >
-            {limit === 1 ? 'Mostra ultimi 5' : 'Mostra ultimo'}
-          </button>
-          <button className="text-sm underline" onClick={onClose}>Chiudi</button>
-        </div>
+    <div className="flex items-center justify-between mt-4 text-sm">
+      <div className="text-stone-600 dark:text-stone-300">
+        {total > 0 ? <>Mostra {from}–{to} di {total}</> : <>Nessun risultato</>}
       </div>
-
-      <div className="mt-4 overflow-x-auto">
-        <table className="w-full text-sm">
-          <thead>
-            <tr className="border-b font-medium text-stone-600 dark:text-stone-300 border-stone-200 dark:border-stone-700">
-              <th className="text-left p-2">Data</th>
-              <th className="text-left p-2">Tipo</th>
-              <th className="text-right p-2">Qtà</th>
-              <th className="text-left p-2">Nota</th>
-              <th className="text-left p-2">Operatore</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-stone-200 dark:divide-stone-800">
-            {rows.map(r => (
-              <tr key={r.id}>
-                <td className="p-2">{new Date(r.created_at).toLocaleString()}</td>
-                <td className="p-2"><TypeBadge type={r.movement} /></td>
-                <td className="p-2 text-right">{r.quantity_units}</td>
-                <td className="p-2">{r.note}</td>
-                <td className="p-2">{r.operator_email ?? ''}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+      <div className="flex items-center gap-2">
+        <button
+          className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
+                     border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700 disabled:opacity-50"
+          disabled={page <= 1}
+          onClick={onPrev}
+        >← Precedente</button>
+        <span className="min-w-[80px] text-center">Pag. {page}/{totalPages}</span>
+        <button
+          className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
+                     border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700 disabled:opacity-50"
+          disabled={page >= totalPages}
+          onClick={onNext}
+        >Successiva →</button>
       </div>
     </div>
   );
