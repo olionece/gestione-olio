@@ -33,15 +33,40 @@ type MovementLogRow = {
 
 type WarehouseRow = { id: string; name: string };
 
-function useSession(): Session | null {
-  const [session, setSession] = useState<Session | null>(null);
-  useEffect(() => {
-    supabase.auth.getSession().then(({ data }) => setSession(data.session));
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, s) => setSession(s));
-    return () => subscription.unsubscribe();
-  }, []);
-  return session;
-}
+const [warehouses, setWarehouses] = useState<WarehouseRow[]>([]);
+const [wh, setWh] = useState<'all' | string>('all'); // filtro magazzino
+
+useEffect(() => {
+  if (!session) return;
+  (async () => {
+    // 1) tenta dalla tabella 'warehouses'
+    const { data: w, error } = await supabase
+      .from('warehouses')
+      .select('id,name')
+      .order('name');
+
+    let list = (w ?? []) as WarehouseRow[];
+
+    // 2) fallback: deduci da v_stock_detailed_wh (nel caso RLS/altro blocchi la tabella)
+    if ((!list || list.length === 0) && !error) {
+      const { data: vw } = await supabase
+        .from('v_stock_detailed_wh')
+        .select('warehouse_id,warehouse_name')
+        .limit(1000);
+      const seen = new Set<string>();
+      list = (vw ?? [])
+        .map((r: any) => ({ id: r.warehouse_id as string, name: r.warehouse_name as string }))
+        .filter(r => r.id && !seen.has(r.id) && seen.add(r.id));
+      // ordina alfabetico
+      list.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    setWarehouses(list);
+
+    // imposta un default sensato
+    if (wh === 'all' && list.length === 1) setWh(list[0].id);
+  })();
+}, [session]); // <-- non mettere [wh] qui: il fetch magazzini serve solo a login/cambio utente
 
 export default function Home() {
   const session = useSession();
