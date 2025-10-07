@@ -15,7 +15,7 @@ type StockRow = {
   variant_id: string; lot_id: string; lot_code: string; vintage: number;
   size_id: string; size_label: string; ml: number;
   units_on_hand: number; liters_on_hand: number;
-  warehouse_id?: string | null; warehouse_name?: string | null; // presenti solo nella vista per-magazzino
+  warehouse_id?: string | null; warehouse_name?: string | null;
 };
 
 type VariantRow = {
@@ -46,20 +46,17 @@ function useSession(): Session | null {
 export default function Home() {
   const session = useSession();
   const [roles, setRoles] = useState<Role[]>([]);
-  const [stock, setStock] = useState<StockRow[]>([]);
   const [warehouses, setWarehouses] = useState<WarehouseRow[]>([]);
-  const [wh, setWh] = useState<'all' | string>('all'); // selezione magazzino (Tutti / id)
+  const [wh, setWh] = useState<'all' | string>('all');  // filtro magazzino
 
-  // Filtri giacenze aggiuntivi
+  const [stock, setStock] = useState<StockRow[]>([]);
   const [fVintage, setFVintage] = useState<number | 'all'>('all');
   const [fLot, setFLot] = useState<'all' | 'A' | 'B' | 'C'>('all');
   const [fSize, setFSize] = useState<'all' | string>('all');
 
   const [reloadLog, setReloadLog] = useState<number>(0);
-
   const canInsert = useMemo(() => roles.includes('operator') || roles.includes('admin'), [roles]);
 
-  // carica ruoli e magazzini
   useEffect(() => {
     if (!session) return;
     (async () => {
@@ -70,36 +67,26 @@ export default function Home() {
     })();
   }, [session]);
 
-  // carica giacenze aggregate o per magazzino
   const refreshStock = async () => {
     if (wh === 'all') {
       const { data, error } = await supabase
-        .from('v_stock_detailed_sum')
-        .select('*')
+        .from('v_stock_detailed_sum').select('*')
         .order('vintage', { ascending: false })
         .order('lot_code', { ascending: true })
         .order('ml', { ascending: true });
-      if (error) { console.error(error); return; }
-      setStock((data ?? []) as StockRow[]);
+      if (!error) setStock((data ?? []) as StockRow[]);
     } else {
       const { data, error } = await supabase
-        .from('v_stock_detailed_wh')
-        .select('*')
+        .from('v_stock_detailed_wh').select('*')
         .eq('warehouse_id', wh)
         .order('vintage', { ascending: false })
         .order('lot_code', { ascending: true })
         .order('ml', { ascending: true });
-      if (error) { console.error(error); return; }
-      setStock((data ?? []) as StockRow[]);
+      if (!error) setStock((data ?? []) as StockRow[]);
     }
   };
+  useEffect(() => { if (session) void refreshStock(); }, [session, wh]);
 
-  useEffect(() => {
-    if (!session) return;
-    void refreshStock();
-  }, [session, wh]);
-
-  // opzioni per filtri giacenze
   const stockVintages = useMemo(() => Array.from(new Set(stock.map(s => s.vintage))).sort((a, b) => b - a), [stock]);
   const stockLots = useMemo(() => Array.from(new Set(stock.map(s => s.lot_code))).sort(), [stock]);
   const stockSizes = useMemo(() => {
@@ -107,13 +94,11 @@ export default function Home() {
     return Array.from(new Set(ordered.map(s => s.size_label)));
   }, [stock]);
 
-  const stockFiltered = useMemo(() => {
-    return stock.filter(s =>
-      (fVintage === 'all' || s.vintage === fVintage) &&
-      (fLot === 'all' || s.lot_code === fLot) &&
-      (fSize === 'all' || s.size_label === fSize)
-    );
-  }, [stock, fVintage, fLot, fSize]);
+  const stockFiltered = useMemo(() => stock.filter(s =>
+    (fVintage === 'all' || s.vintage === fVintage) &&
+    (fLot === 'all' || s.lot_code === fLot) &&
+    (fSize === 'all' || s.size_label === fSize)
+  ), [stock, fVintage, fLot, fSize]);
 
   const totals = useMemo(() => {
     const liters = stockFiltered.reduce((sum, r) => sum + (r.liters_on_hand ?? 0), 0);
@@ -153,72 +138,52 @@ export default function Home() {
         <div className="flex items-center gap-2 flex-wrap">
           <ThemeToggle />
           <RolesChips roles={roles} />
-          <button
-            className="inline-flex items-center rounded-lg border px-3 py-1.5 text-sm shadow-sm
-                       bg-white hover:bg-stone-50 border-stone-200
-                       dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
-            onClick={signOut}
-          >
-            Esci
-          </button>
+          <button className="inline-flex items-center rounded-lg border px-3 py-1.5 text-sm shadow-sm
+                             bg-white hover:bg-stone-50 border-stone-200
+                             dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
+                  onClick={signOut}>Esci</button>
         </div>
       </div>
 
-      {/* Stat cards (sui dati filtrati) */}
+      {/* Stat cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <StatCard label={`Litri (${wh === 'all' ? 'tutti i magazzini' : (warehouses.find(x=>x.id===wh)?.name || 'magazzino')})`} value={`${totals.liters.toLocaleString(undefined, { maximumFractionDigits: 2 })} L`} />
+        <StatCard label={`Litri (${wh === 'all' ? 'tutti i magazzini' : (warehouses.find(x=>x.id===wh)?.name || 'magazzino')})`}
+                  value={`${totals.liters.toLocaleString(undefined, { maximumFractionDigits: 2 })} L`} />
         <StatCard label="Unità (filtro)" value={totals.units.toLocaleString()} />
         <StatCard label="Varianti (filtro)" value={stockFiltered.length.toString()} />
       </div>
 
-      {/* Giacenze + Filtri (incluso Magazzino) */}
+      {/* Giacenze + Filtri (Magazzino/Annata/Lotto/Formato) */}
       <div className="rounded-2xl border bg-white shadow-sm border-stone-200 dark:bg-stone-900 dark:border-stone-700">
         <div className="p-4 md:p-6 border-b border-stone-200 dark:border-stone-700 flex items-center justify-between gap-3 flex-wrap">
           <h2 className="text-lg md:text-xl font-semibold">Giacenze</h2>
           <div className="flex items-center gap-2 flex-wrap text-sm">
-            {/* Magazzino */}
-            <select
-              className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-              value={wh}
-              onChange={e => setWh(e.target.value)}
-              title="Filtra per magazzino"
-            >
+            <select className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+                    value={wh} onChange={e => setWh(e.target.value)} title="Filtra per magazzino">
               <option value="all">Tutti i magazzini</option>
               {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
             </select>
-            {/* Annata */}
-            <select
-              className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-              value={fVintage === 'all' ? 'all' : String(fVintage)}
-              onChange={e => setFVintage(e.target.value === 'all' ? 'all' : Number(e.target.value))}
-            >
+            <select className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+                    value={fVintage === 'all' ? 'all' : String(fVintage)}
+                    onChange={e => setFVintage(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
               <option value="all">Tutte le annate</option>
               {stockVintages.map(v => <option key={v} value={v}>{v}</option>)}
             </select>
-            {/* Lotto */}
-            <select
-              className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-              value={fLot}
-              onChange={e => setFLot(e.target.value as 'all'|'A'|'B'|'C')}
-            >
+            <select className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+                    value={fLot}
+                    onChange={e => setFLot(e.target.value as 'all'|'A'|'B'|'C')}>
               <option value="all">Tutti i lotti</option>
               {stockLots.map(l => <option key={l} value={l}>{l}</option>)}
             </select>
-            {/* Formato */}
-            <select
-              className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-              value={fSize}
-              onChange={e => setFSize(e.target.value as 'all'|string)}
-            >
+            <select className="border rounded-lg p-2 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+                    value={fSize}
+                    onChange={e => setFSize(e.target.value as 'all'|string)}>
               <option value="all">Tutti i formati</option>
               {stockSizes.map(s => <option key={s} value={s}>{s}</option>)}
             </select>
-            {/* Reset */}
-            <button
-              className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
-                         border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
-              onClick={() => { setFVintage('all'); setFLot('all'); setFSize('all'); }}
-            >
+            <button className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
+                               border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
+                    onClick={() => { setFVintage('all'); setFLot('all'); setFSize('all'); }}>
               Azzera filtri
             </button>
           </div>
@@ -256,7 +221,7 @@ export default function Home() {
         </div>
       </div>
 
-      {/* Form movimenti (include magazzino) */}
+      {/* Form movimenti (con magazzino) */}
       <div className="rounded-2xl border bg-white shadow-sm border-stone-200 dark:bg-stone-900 dark:border-stone-700">
         <div className="p-4 md:p-6 border-b border-stone-200 dark:border-stone-700">
           <h2 className="text-lg md:text-xl font-semibold">Registra movimento</h2>
@@ -275,10 +240,7 @@ export default function Home() {
 
       {/* Storico movimenti con filtro Magazzino */}
       <div className="rounded-2xl border bg-white shadow-sm border-stone-200 dark:bg-stone-900 dark:border-stone-700">
-        <MovementsLog
-          reloadKey={reloadLog}
-          warehouses={warehouses}
-        />
+        <MovementsLog reloadKey={reloadLog} warehouses={warehouses} />
       </div>
     </div>
   );
@@ -328,7 +290,6 @@ function MovementForm({ onInserted, warehouses, wh }: {
   const [variants, setVariants] = useState<VariantRow[]>([]);
   const [warehouseId, setWarehouseId] = useState<string>('');
 
-  // selezioni a cascata
   const [selVintage, setSelVintage] = useState<number | null>(null);
   const [selLot, setSelLot] = useState<'A'|'B'|'C' | ''>('');
   const [selSize, setSelSize] = useState<string>('');
@@ -339,33 +300,26 @@ function MovementForm({ onInserted, warehouses, wh }: {
   const [busy, setBusy] = useState<boolean>(false);
   const [toast, setToast] = useState<{type:'ok'|'err'; msg:string} | null>(null);
 
-  // carica varianti
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase
-        .from('v_stock_units') // base (senza magazzino), serve solo per lista varianti
-        .select('*')
+        .from('v_stock_units').select('*')
         .order('vintage', { ascending: false })
         .order('lot_code', { ascending: true })
         .order('ml', { ascending: true });
-      if (error) { console.error(error); return; }
-      const rows = (data ?? []) as VariantRow[];
-      setVariants(rows);
-      if (rows[0]) {
-        setSelVintage(rows[0].vintage);
-        setSelLot(rows[0].lot_code as 'A'|'B'|'C');
-        setSelSize(rows[0].size_label);
+      if (!error) {
+        const rows = (data ?? []) as VariantRow[];
+        setVariants(rows);
+        if (rows[0]) { setSelVintage(rows[0].vintage); setSelLot(rows[0].lot_code as 'A'|'B'|'C'); setSelSize(rows[0].size_label); }
       }
     })();
   }, []);
 
-  // imposta magazzino default
   useEffect(() => {
     if (wh !== 'all') setWarehouseId(wh);
     else if (warehouses[0]) setWarehouseId(warehouses[0].id);
   }, [wh, warehouses]);
 
-  // opzioni derivate
   const formVintages = useMemo(() => Array.from(new Set(variants.map(v => v.vintage))).sort((a,b)=>b-a), [variants]);
   const formLots = useMemo(() => {
     const src = selVintage ? variants.filter(v => v.vintage === selVintage) : variants;
@@ -379,22 +333,16 @@ function MovementForm({ onInserted, warehouses, wh }: {
     return Array.from(new Set(src.map(v => v.size_label)));
   }, [variants, selVintage, selLot]);
 
-  // calcola variant
   useEffect(() => {
     if (selVintage && selLot && selSize) {
       const match = variants.find(v => v.vintage === selVintage && v.lot_code === selLot && v.size_label === selSize);
       setVariantId(match?.variant_id ?? '');
-    } else {
-      setVariantId('');
-    }
+    } else { setVariantId(''); }
   }, [variants, selVintage, selLot, selSize]);
 
   const normalizeQty = (s: string): number => {
     const n = parseInt(s, 10);
-    if (movement === 'adjust') {
-      if (Number.isNaN(n) || n === 0) return -1;
-      return n;
-    }
+    if (movement === 'adjust') { if (Number.isNaN(n) || n === 0) return -1; return n; }
     if (Number.isNaN(n) || n < 1) return 1;
     return n;
   };
@@ -405,40 +353,26 @@ function MovementForm({ onInserted, warehouses, wh }: {
     const qty = normalizeQty(qtyInput);
     const { data: userData } = await supabase.auth.getUser();
     const { error } = await supabase.from('inventory_movements').insert({
-      variant_id: variantId,
-      movement, quantity_units: qty,
-      warehouse_id: warehouseId,
-      note: note || null,
-      created_by: userData.user?.id ?? null
+      variant_id: variantId, movement, quantity_units: qty,
+      warehouse_id: warehouseId, note: note || null, created_by: userData.user?.id ?? null
     });
     setBusy(false);
-    if (error) {
-      setToast({ type:'err', msg: error.message });
-    } else {
-      setToast({ type:'ok', msg: 'Movimento registrato' });
-      setNote('');
-      setQtyInput(movement === 'adjust' ? '-1' : '1');
-      onInserted();
-    }
+    if (error) setToast({ type:'err', msg: error.message });
+    else { setToast({ type:'ok', msg: 'Movimento registrato' }); setNote(''); setQtyInput(movement === 'adjust' ? '-1' : '1'); onInserted(); }
     setTimeout(() => setToast(null), 2500);
   };
 
   const mvBtn = (val: 'in'|'out'|'adjust', label: string, cls: string) => (
-    <button
-      type="button"
-      onClick={() => { setMovement(val); setQtyInput(val === 'adjust' ? '-1' : '1'); }}
+    <button type="button" onClick={() => { setMovement(val); setQtyInput(val === 'adjust' ? '-1' : '1'); }}
       className={`px-3 py-1.5 text-sm rounded-lg border transition
         ${movement === val ? `${cls} ring-2 ring-offset-1 ring-offset-amber-50 dark:ring-offset-stone-900`
-                           : 'bg-white hover:bg-stone-50 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700'}
-      `}
-    >
+                           : 'bg-white hover:bg-stone-50 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700'}`}>
       {label}
     </button>
   );
 
   return (
     <div className="space-y-4">
-      {/* segmented control */}
       <div className="inline-flex gap-2 rounded-xl p-1 border bg-stone-50
                       border-stone-200 dark:bg-stone-800/40 dark:border-stone-700">
         {mvBtn('in', 'Ingresso', 'bg-green-50 border-green-200 text-green-700 dark:bg-green-900/30 dark:border-green-800 dark:text-green-200')}
@@ -448,88 +382,69 @@ function MovementForm({ onInserted, warehouses, wh }: {
 
       <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
         {/* Magazzino */}
-        <select
-          className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-          value={warehouseId}
-          onChange={e => setWarehouseId(e.target.value)}
-          disabled={wh !== 'all'} // se stai filtrando per un magazzino, blocca la select
-          title="Magazzino"
-        >
+        <select className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+                value={warehouseId} onChange={e => setWarehouseId(e.target.value)} disabled={wh !== 'all'} title="Magazzino">
           {(wh === 'all' ? warehouses : warehouses.filter(w => w.id === wh))
             .map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
         </select>
 
         {/* Annata */}
-        <select
-          className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-          value={selVintage ?? ''}
-          onChange={e => { const v = e.target.value ? Number(e.target.value) : null; setSelVintage(v); setSelLot(''); setSelSize(''); }}
-          title="Annata"
-        >
+        <select className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+                value={selVintage ?? ''} onChange={e => { const v = e.target.value ? Number(e.target.value) : null; setSelVintage(v); setSelLot(''); setSelSize(''); }}
+                title="Annata">
           {formVintages.length === 0 && <option value="">(nessuna)</option>}
           {formVintages.map(v => <option key={v} value={v}>{v}</option>)}
         </select>
 
         {/* Lotto */}
-        <select
-          className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-          value={selLot}
-          onChange={e => { setSelLot(e.target.value as 'A'|'B'|'C'|''); setSelSize(''); }}
-          disabled={!selVintage}
-          title="Lotto"
-        >
+        <select className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+                value={selLot} onChange={e => { setSelLot(e.target.value as 'A'|'B'|'C'|''); setSelSize(''); }}
+                disabled={!selVintage} title="Lotto">
           {(!selVintage || formLots.length === 0) && <option value="">(seleziona annata)</option>}
           {formLots.map(l => <option key={l} value={l}>{l}</option>)}
         </select>
 
         {/* Formato */}
-        <select
-          className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-          value={selSize}
-          onChange={e => setSelSize(e.target.value)}
-          disabled={!selVintage || !selLot}
-          title="Formato"
-        >
+        <select className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+                value={selSize} onChange={e => setSelSize(e.target.value)} disabled={!selVintage || !selLot} title="Formato">
           {(!selVintage || !selLot || formSizes.length === 0) && <option value="">(seleziona lotto)</option>}
           {formSizes.map(s => <option key={s} value={s}>{s}</option>)}
         </select>
 
         {/* Quantità */}
-        <input
-          className="border rounded-lg p-2.5 bg-white border-stone-200
-                     dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-          type="text" inputMode="numeric"
-          pattern={movement === 'adjust' ? '[0-9-]*' : '[0-9]*'}
-          value={qtyInput}
-          onFocus={(e) => e.currentTarget.select()}
-          onKeyDown={(e) => {
-            const ctl = ['Backspace','Delete','ArrowLeft','ArrowRight','Home','End','Tab','Enter'];
-            const isDigit = /^\d$/.test(e.key);
-            const minusOK = movement === 'adjust' && e.key === '-' &&
-                            e.currentTarget.selectionStart === 0 && !qtyInput.includes('-');
-            if (isDigit || minusOK || ctl.includes(e.key)) return;
-            e.preventDefault();
-          }}
-          onChange={(e) => {
-            let v = e.target.value;
-            v = movement === 'adjust' ? v.replace(/[^\d-]/g, '').replace(/(?!^)-/g, '') : v.replace(/[^\d]/g, '');
-            setQtyInput(v);
-          }}
-          onBlur={() => setQtyInput(String(normalizeQty(qtyInput)))}
-          placeholder={movement === 'adjust' ? 'es. -3 per scarto' : 'Quantità'}
-        />
+        <input className="border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+               type="text" inputMode="numeric" pattern={movement === 'adjust' ? '[0-9-]*' : '[0-9]*'}
+               value={qtyInput}
+               onFocus={(e) => e.currentTarget.select()}
+               onKeyDown={(e) => {
+                 const ctl = ['Backspace','Delete','ArrowLeft','ArrowRight','Home','End','Tab','Enter'];
+                 const isDigit = /^\d$/.test(e.key);
+                 const minusOK = movement === 'adjust' && e.key === '-' && e.currentTarget.selectionStart === 0 && !qtyInput.includes('-');
+                 if (isDigit || minusOK || ctl.includes(e.key)) return;
+                 e.preventDefault();
+               }}
+               onChange={(e) => {
+                 let v = e.target.value;
+                 v = movement === 'adjust' ? v.replace(/[^\d-]/g, '').replace(/(?!^)-/g, '') : v.replace(/[^\d]/g, '');
+                 setQtyInput(v);
+               }}
+               onBlur={() => setQtyInput(String(normalizeQty(qtyInput)))}
+               placeholder={movement === 'adjust' ? 'es. -3 per scarto' : 'Quantità'} />
 
         {/* Salva */}
-        <button
-          onClick={submit}
-          className="rounded-lg border px-4 py-2.5 bg-amber-600 text-white hover:bg-amber-700 shadow-sm disabled:opacity-60
-                     border-amber-700 dark:border-amber-700"
-          disabled={busy || !variantId || !warehouseId}
-          title={!variantId ? 'Seleziona annata, lotto e formato' : (!warehouseId ? 'Seleziona magazzino' : 'Salva movimento')}
-        >
+        <button onClick={submit}
+                className="rounded-lg border px-4 py-2.5 bg-amber-600 text-white hover:bg-amber-700 shadow-sm disabled:opacity-60
+                           border-amber-700 dark:border-amber-700"
+                disabled={busy || !variantId || !warehouseId}
+                title={!variantId ? 'Seleziona annata, lotto e formato' : (!warehouseId ? 'Seleziona magazzino' : 'Salva movimento')}>
           {busy ? 'Salvataggio…' : 'Salva'}
         </button>
       </div>
+
+      <input className="w-full border rounded-lg p-2.5 bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+             placeholder="Nota (facoltativa)" value={note}
+             onChange={e=>setNote(e.target.value)}
+             onKeyDown={(e)=>{ if (e.key === 'Enter') submit(); }} />
 
       {toast && (
         <div className={`fixed bottom-5 right-5 rounded-xl border px-4 py-2.5 shadow-lg
@@ -543,17 +458,16 @@ function MovementForm({ onInserted, warehouses, wh }: {
   );
 }
 
-/* ====== Storico movimenti (aggiunto filtro Magazzino) ====== */
+/* ====== Storico movimenti (con filtro Magazzino) ====== */
 function MovementsLog({ reloadKey, warehouses }: { reloadKey: number; warehouses: WarehouseRow[] }) {
   const PAGE_SIZE = 50;
   const [rows, setRows] = useState<MovementLogRow[]>([]);
   const [mvType, setMvType] = useState<MovementType>('all');
+  const [warehouse, setWarehouse] = useState<'all' | string>('all');
   const [vintage, setVintage] = useState<number | 'all'>('all');
   const [lot, setLot] = useState<string | 'all'>('all');
   const [size, setSize] = useState<string | 'all'>('all');
-  const [warehouse, setWarehouse] = useState<'all' | string>('all');
   const [q, setQ] = useState<string>('');
-
   const [page, setPage] = useState<number>(1);
   const [total, setTotal] = useState<number>(0);
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -561,37 +475,30 @@ function MovementsLog({ reloadKey, warehouses }: { reloadKey: number; warehouses
   const to = from + PAGE_SIZE - 1;
 
   const refreshMovements = async () => {
-    let query = supabase
-      .from('v_movements_detailed')
-      .select('*', { count: 'exact' })
-      .order('created_at', { ascending: false })
-      .range(from, to);
-
+    let query = supabase.from('v_movements_detailed').select('*', { count: 'exact' })
+      .order('created_at', { ascending: false }).range(from, to);
     if (mvType !== 'all') query = query.eq('movement', mvType);
+    if (warehouse !== 'all') query = query.eq('warehouse_id', warehouse);
     if (vintage !== 'all') query = query.eq('vintage', vintage as number);
     if (lot !== 'all') query = query.eq('lot_code', lot);
     if (size !== 'all') query = query.eq('size_label', size);
-    if (warehouse !== 'all') query = query.eq('warehouse_id', warehouse);
     if (q.trim() !== '') {
       const term = q.trim().replace(/%/g, '\\%').replace(/_/g, '\\_');
       query = query.or(`note.ilike.%${term}%,operator_email.ilike.%${term}%`);
     }
-
     const { data, error, count } = await query;
-    if (error) { console.error(error); return; }
-    setRows((data ?? []) as MovementLogRow[]);
-    setTotal(count ?? 0);
+    if (!error) { setRows((data ?? []) as MovementLogRow[]); setTotal(count ?? 0); }
   };
 
-  useEffect(() => { setPage(1); }, [mvType, vintage, lot, size, warehouse, q, reloadKey]);
-  useEffect(() => { void refreshMovements(); }, [page, mvType, vintage, lot, size, warehouse, q, reloadKey]);
+  useEffect(() => { setPage(1); }, [reloadKey, mvType, warehouse, vintage, lot, size, q]);
+  useEffect(() => { void refreshMovements(); }, [page, reloadKey, mvType, warehouse, vintage, lot, size, q]);
 
   const csvEscape = (v: string) => `"${v.replace(/"/g, '""')}"`;
   const exportCsv = () => {
-    const header = ['Data','Tipo','Annata','Lotto','Formato','Qtà','Nota','Operatore','Magazzino','Variante'];
+    const header = ['Data','Tipo','Magazzino','Annata','Lotto','Formato','Qtà','Nota','Operatore','Variante'];
     const lines = rows.map(r => [
-      new Date(r.created_at).toLocaleString(), r.movement, String(r.vintage), r.lot_code,
-      r.size_label, String(r.quantity_units), r.note ?? '', r.operator_email ?? '', r.warehouse_name ?? '', r.variant_id
+      new Date(r.created_at).toLocaleString(), r.movement, r.warehouse_name, String(r.vintage), r.lot_code,
+      r.size_label, String(r.quantity_units), r.note ?? '', r.operator_email ?? '', r.variant_id
     ].map(x => csvEscape(String(x))).join(','));
     const csv = header.map(csvEscape).join(',') + '\n' + lines.join('\n');
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
@@ -605,48 +512,35 @@ function MovementsLog({ reloadKey, warehouses }: { reloadKey: number; warehouses
                       flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <h2 className="text-lg md:text-xl font-semibold">📜 Movimenti (ultimi 200)</h2>
         <div className="flex items-center gap-2 flex-wrap">
-          <input
-            className="border rounded-lg p-2 text-sm bg-white border-stone-200
-                       dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
-            placeholder="Cerca in Nota o Operatore…"
-            value={q}
-            onChange={e => setQ(e.target.value)}
-          />
-
+          <input className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
+                 placeholder="Cerca in Nota o Operatore…" value={q}
+                 onChange={e => setQ(e.target.value)} />
           <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
                   value={mvType} onChange={e => setMvType(e.target.value as MovementType)}>
-            <option value="all">Tutti i tipi</option>
-            <option value="in">Ingresso</option>
-            <option value="out">Uscita</option>
-            <option value="adjust">Rettifica</option>
+            <option value="all">Tutti i tipi</option><option value="in">Ingresso</option>
+            <option value="out">Uscita</option><option value="adjust">Rettifica</option>
           </select>
-
           <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
                   value={warehouse} onChange={e => setWarehouse(e.target.value)}>
             <option value="all">Tutti i magazzini</option>
             {warehouses.map(w => <option key={w.id} value={w.id}>{w.name}</option>)}
           </select>
-
           <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
                   value={vintage === 'all' ? 'all' : String(vintage)}
                   onChange={e => setVintage(e.target.value === 'all' ? 'all' : Number(e.target.value))}>
             <option value="all">Tutte le annate</option>
-            {/* Valori dinamici: per prestazioni, potresti caricarli server-side; qui li lasciamo liberi */}
             {[...new Set(rows.map(r => r.vintage))].sort((a,b)=>Number(b)-Number(a)).map(v => <option key={v} value={v}>{v}</option>)}
           </select>
-
           <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
                   value={lot} onChange={e => setLot(e.target.value)}>
             <option value="all">Tutti i lotti</option>
             {[...new Set(rows.map(r => r.lot_code))].sort().map(l => <option key={l} value={l}>{l}</option>)}
           </select>
-
           <select className="border rounded-lg p-2 text-sm bg-white border-stone-200 dark:bg-stone-950 dark:text-stone-100 dark:border-stone-700"
                   value={size} onChange={e => setSize(e.target.value)}>
             <option value="all">Tutti i formati</option>
             {[...new Set(rows.map(r => r.size_label))].sort().map(s => <option key={s} value={s}>{s}</option>)}
           </select>
-
           <button className="rounded-lg border px-3 py-1.5 text-sm bg-white hover:bg-stone-50 shadow-sm
                              border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700"
                   onClick={() => { setQ(''); setMvType('all'); setWarehouse('all'); setVintage('all'); setLot('all'); setSize('all'); setPage(1); }}>
@@ -694,43 +588,30 @@ function MovementsLog({ reloadKey, warehouses }: { reloadKey: number; warehouses
           </tbody>
         </table>
 
-        {/* Pagination */}
-        <Pagination
-          page={page}
-          total={total}
-          pageSize={PAGE_SIZE}
-          onPrev={() => setPage(p => Math.max(1, p - 1))}
-          onNext={() => setPage(p => Math.min(Math.max(1, Math.ceil(total / PAGE_SIZE)), p + 1))}
-        />
+        <Pagination page={page} total={total} pageSize={PAGE_SIZE}
+                    onPrev={() => setPage(p => Math.max(1, p - 1))}
+                    onNext={() => setPage(p => Math.min(Math.max(1, Math.ceil(total / PAGE_SIZE)), p + 1))} />
       </div>
     </>
   );
 }
 
-/* ====== piccoli componenti ====== */
-function Pagination({ page, total, pageSize, onPrev, onNext }: { page: number; total: number; pageSize: number; onPrev: () => void; onNext: () => void; }) {
+function Pagination({ page, total, pageSize, onPrev, onNext }:
+  { page: number; total: number; pageSize: number; onPrev: () => void; onNext: () => void; }) {
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
   const from = total === 0 ? 0 : (page - 1) * pageSize + 1;
   const to = Math.min(total, page * pageSize);
   return (
     <div className="flex items-center justify-between mt-4 text-sm">
-      <div className="text-stone-600 dark:text-stone-300">
-        {total > 0 ? <>Mostra {from}–{to} di {total}</> : <>Nessun risultato</>}
-      </div>
+      <div className="text-stone-600 dark:text-stone-300">{total > 0 ? <>Mostra {from}–{to} di {total}</> : <>Nessun risultato</>}</div>
       <div className="flex items-center gap-2">
-        <button
-          className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
-                     border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700 disabled:opacity-50"
-          disabled={page <= 1}
-          onClick={onPrev}
-        >← Precedente</button>
+        <button className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
+                           border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700 disabled:opacity-50"
+                disabled={page <= 1} onClick={onPrev}>← Precedente</button>
         <span className="min-w-[80px] text-center">Pag. {page}/{totalPages}</span>
-        <button
-          className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
-                     border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700 disabled:opacity-50"
-          disabled={page >= totalPages}
-          onClick={onNext}
-        >Successiva →</button>
+        <button className="rounded-lg border px-3 py-1.5 bg-white hover:bg-stone-50 shadow-sm
+                           border-stone-200 dark:bg-stone-900 dark:hover:bg-stone-800 dark:border-stone-700 disabled:opacity-50"
+                disabled={page >= totalPages} onClick={onNext}>Successiva →</button>
       </div>
     </div>
   );
@@ -743,9 +624,5 @@ function TypeBadge({ type }: { type: 'in'|'out'|'adjust' }) {
     adjust: 'bg-amber-50 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-200 dark:border-amber-800',
   } as const;
   const label = { in: 'Ingresso', out: 'Uscita', adjust: 'Rettifica' }[type];
-  return (
-    <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${map[type]}`}>
-      {label}
-    </span>
-  );
+  return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs ${map[type]}`}>{label}</span>;
 }
