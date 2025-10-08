@@ -340,9 +340,7 @@ function MovementForm({ onInserted, warehouses, wh }: {
     })();
   }, []);
 
-  useEffect(() => {const { data, error } = await supabase.from('warehouses').select('id,name').order('name');
-console.log('WAREHOUSES DATA:', data, 'ERROR:', error);
-
+  useEffect(() => {
     if (wh !== 'all') setWarehouseId(wh);
     else if (warehouses[0]) setWarehouseId(warehouses[0].id);
   }, [wh, warehouses]);
