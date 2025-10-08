@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import AuthBox from '@/components/Auth';
-import ThemeToggle from '@/components/ThemeToggle';
+import ThemeToggle from '../components/ThemeToggle';
 import type { Session } from '@supabase/supabase-js';
 
 type Role = 'viewer' | 'operator' | 'admin';
