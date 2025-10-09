@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState, useCallback } from 'react';
 import { supabase } from '@/lib/supabaseClient';
 import AuthBox from '@/components/Auth';
 import ThemeToggle from '../components/ThemeToggle';
@@ -117,7 +117,7 @@ export default function Home() {
     })();
   }, [session]);
 
-  const refreshStock = async () => {
+  const refreshStock = useCallback(async () => {
     if (wh === 'all') {
       const { data, error } = await supabase
         .from('v_stock_detailed_sum').select('*')
@@ -135,7 +135,7 @@ export default function Home() {
       if (!error) setStock((data ?? []) as StockRow[]);
     }
   };
-  useEffect(() => { if (session) void refreshStock(); }, [session, wh]);
+  useEffect(() => { if (session) void refreshStock(); }, [session, refreshStock]);
 
   const stockVintages = useMemo(() => Array.from(new Set(stock.map(s => s.vintage))).sort((a, b) => b - a), [stock]);
   const stockLots = useMemo(() => Array.from(new Set(stock.map(s => s.lot_code))).sort(), [stock]);
