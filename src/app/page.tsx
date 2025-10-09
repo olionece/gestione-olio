@@ -100,6 +100,7 @@ export default function Home() {
   const [wh, setWh] = useState<'all' | string>('all');  // filtro magazzino
 
   const [stock, setStock] = useState<StockRow[]>([]);
+  const [wh, setWh] = useState<'all' | string>('all');
   const [fVintage, setFVintage] = useState<number | 'all'>('all');
   const [fLot, setFLot] = useState<'all' | 'A' | 'B' | 'C'>('all');
   const [fSize, setFSize] = useState<'all' | string>('all');
