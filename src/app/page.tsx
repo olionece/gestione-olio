@@ -34,7 +34,32 @@ type MovementLogRow = {
 type WarehouseRow = { id: string; name: string };
 
 const [warehouses, setWarehouses] = useState<WarehouseRow[]>([]);
-const [wh, setWh] = useState<'all' | string>('all'); // filtro magazzino
+const [wh, setWh] = useState<'all' | string>('all');
+type WarehouseRow = { id: string; name: string };
+
+const [warehouses, setWarehouses] = useState<WarehouseRow[]>([]);
+const [wh, setWh] = useState<'all' | string>('all');
+
+// Fallback con gli UUID che hai in DB (Neci/Roma)
+const DEFAULT_WAREHOUSES: WarehouseRow[] = [
+  { id: '16a1716a-e748-4895-bd38-9807e8fcaaf4', name: 'Neci' },
+  { id: '5630b7e1-becf-4f4e-8ed3-84f8c82f8bd4', name: 'Roma' },
+];
+
+useEffect(() => {
+  if (!session) return;
+  (async () => {
+    const { data, error } = await supabase.from('warehouses').select('id,name').order('name');
+    if (error) {
+      console.warn('WAREHOUSES error:', error);
+      setWarehouses(DEFAULT_WAREHOUSES);
+      return;
+    }
+    const list = (data ?? []);
+    setWarehouses(list.length ? list : DEFAULT_WAREHOUSES);
+  })();
+}, [session]);
+
 
 useEffect(() => {
   if (!session) return;
